@@ -20,6 +20,35 @@ Speech MCP provides a voice interface for Goose, allowing users to interact thro
 
 ## Installation
 
+### Option 1: Quick Install (One-Click)
+
+Click the link below if you have Goose installed:
+
+`goose://extension?cmd=uvx&arg=speech-mcp&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose`
+
+### Option 2: Using Goose CLI (recommended)
+
+Start Goose with your extension enabled:
+
+```bash
+# If you installed via PyPI
+goose session --with-extension "uvx speech-mcp"
+
+# Or if you want to use a local development version
+goose session --with-extension "python -m speech_mcp"
+```
+
+### Option 3: Manual setup in Goose
+
+1. Run `goose configure`
+2. Select "Add Extension" from the menu
+3. Choose "Command-line Extension"
+4. Enter a name (e.g., "Speech Interface")
+5. For the command, enter: `uvx speech-mcp`
+6. Follow the prompts to complete the setup
+
+### Option 4: Manual Installation
+
 1. Clone this repository
 2. Install dependencies:
    ```
