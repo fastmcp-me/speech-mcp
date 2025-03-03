@@ -1,25 +1,11 @@
-import tkinter as tk
-from tkinter import ttk
 import os
 import json
 import time
 import threading
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.animation as animation
-from matplotlib.figure import Figure
-import pyaudio
-import wave
 import logging
-import math
-import whisper
 import tempfile
-from queue import Queue
-import threading
-from pydub import AudioSegment
-from pydub.playback import play
 import io
+from queue import Queue
 
 # Set up logging
 logging.basicConfig(
@@ -27,6 +13,25 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Import other dependencies
+import numpy as np
+import wave
+import pyaudio
+
+# For text-to-speech
+try:
+    import pyttsx3
+    tts_engine = pyttsx3.init()
+    tts_available = True
+    print("Text-to-speech engine initialized successfully!")
+except ImportError:
+    print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
+    tts_available = False
+
+# These will be imported later when needed
+whisper_loaded = False
+speech_recognition_loaded = False
 
 # Path to save speech state - same as in server.py
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_state.json")
@@ -40,121 +45,70 @@ CHANNELS = 1
 RATE = 16000
 RECORD_SECONDS = 5
 
-class AudioVisualizer:
-    def __init__(self, ax, title, color):
-        self.ax = ax
-        self.title = title
-        self.color = color
-        self.line, = ax.plot([], [], color=color, lw=2)
-        self.ax.set_ylim(-1, 1)
-        self.ax.set_xlim(-1, 1)
-        self.ax.set_title(title)
-        self.ax.axis('off')
-        self.data = np.zeros(360)
-        self.angles = np.linspace(0, 2*np.pi, 360)
-        
-    def update(self, frame, data=None):
-        if data is not None:
-            self.data = data
-        
-        # Convert to polar coordinates for circle visualization
-        x = self.data * np.cos(self.angles)
-        y = self.data * np.sin(self.angles)
-        
-        self.line.set_data(x, y)
-        return self.line,
+# Import optional dependencies when needed
+def load_whisper():
+    global whisper_loaded
+    try:
+        global whisper
+        print("Loading Whisper speech recognition model... This may take a moment.")
+        import whisper
+        whisper_loaded = True
+        logger.info("Whisper successfully loaded")
+        print("Whisper speech recognition model loaded successfully!")
+        return True
+    except ImportError as e:
+        logger.error(f"Failed to load whisper: {e}")
+        print(f"ERROR: Failed to load Whisper module: {e}")
+        print("Trying to fall back to SpeechRecognition library...")
+        return load_speech_recognition()
 
-class SpeechUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Speech MCP")
-        self.root.geometry("800x500")
-        
-        # Load the initial speech state
-        self.load_speech_state()
-        
-        # Create main frame
-        main_frame = ttk.Frame(root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Create title label
-        title_label = ttk.Label(
-            main_frame, 
-            text="Voice Interaction", 
-            font=('Arial', 16, 'bold')
-        )
-        title_label.pack(pady=10)
-        
-        # Create frame for visualizers
-        vis_frame = ttk.Frame(main_frame)
-        vis_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Create matplotlib figure for visualizers
-        self.fig = Figure(figsize=(8, 4), dpi=100)
-        self.ax1 = self.fig.add_subplot(121, polar=False)
-        self.ax2 = self.fig.add_subplot(122, polar=False)
-        
-        # Create audio visualizers
-        self.user_visualizer = AudioVisualizer(self.ax1, "User Speech", "#3498db")
-        self.agent_visualizer = AudioVisualizer(self.ax2, "Agent Speech", "#e74c3c")
-        
-        # Add the figure to the tkinter window
-        self.canvas = FigureCanvasTkAgg(self.fig, master=vis_frame)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        # Create status frame
-        status_frame = ttk.Frame(main_frame)
-        status_frame.pack(fill=tk.X, pady=10)
-        
-        # Create status labels
-        self.user_status = ttk.Label(
-            status_frame, 
-            text="User: Idle", 
-            font=('Arial', 12)
-        )
-        self.user_status.pack(side=tk.LEFT, padx=20)
-        
-        self.agent_status = ttk.Label(
-            status_frame, 
-            text="Agent: Idle", 
-            font=('Arial', 12)
-        )
-        self.agent_status.pack(side=tk.RIGHT, padx=20)
-        
-        # Create transcript display
-        transcript_frame = ttk.LabelFrame(main_frame, text="Transcript")
-        transcript_frame.pack(fill=tk.X, pady=10)
-        
-        self.transcript_text = tk.Text(transcript_frame, height=4, wrap=tk.WORD)
-        self.transcript_text.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Initialize PyAudio
-        self.p = pyaudio.PyAudio()
+def load_speech_recognition():
+    global speech_recognition_loaded
+    try:
+        global sr
+        import speech_recognition as sr
+        speech_recognition_loaded = True
+        logger.info("SpeechRecognition successfully loaded")
+        print("SpeechRecognition library loaded successfully!")
+        return True
+    except ImportError as e:
+        logger.error(f"Failed to load SpeechRecognition: {e}")
+        print(f"ERROR: Failed to load SpeechRecognition module: {e}")
+        print("Please install it with: pip install SpeechRecognition")
+        return False
+
+class SimpleSpeechProcessor:
+    """A simple speech processor without GUI"""
+    def __init__(self):
+        # Initialize basic components
+        print("Initializing speech processor...")
+        self.ui_active = True
+        self.listening = False
+        self.speaking = False
+        self.last_transcript = ""
+        self.last_response = ""
+        self.should_update = True
         self.stream = None
         
-        # Initialize Whisper model (load the small model for faster processing)
-        logger.info("Loading Whisper model...")
-        self.loading_label = ttk.Label(
-            main_frame,
-            text="Loading Whisper model... Please wait...",
-            font=('Arial', 12)
-        )
-        self.loading_label.pack(pady=10)
-        self.root.update()
+        # Initialize PyAudio
+        print("Initializing audio system...")
+        self.p = pyaudio.PyAudio()
         
-        # Load the model in a separate thread to avoid blocking the UI
+        # Load speech state
+        self.load_speech_state()
+        
+        # Load whisper
+        print("Checking for speech recognition module...")
+        if not load_whisper():
+            print("WARNING: Speech recognition will not be available.")
+            print("Please install the Whisper module with: pip install openai-whisper")
+            return
+        
+        # Initialize Whisper model
         self.whisper_model = None
-        threading.Thread(target=self.load_whisper_model).start()
-        
-        # Animation for visualizers
-        self.ani1 = animation.FuncAnimation(
-            self.fig, self.user_visualizer.update, interval=50, blit=True)
-        self.ani2 = animation.FuncAnimation(
-            self.fig, self.agent_visualizer.update, interval=50, blit=True)
+        self.load_whisper_model()
         
         # Start threads for monitoring state changes
-        self.should_update = True
         self.update_thread = threading.Thread(target=self.check_for_updates)
         self.update_thread.daemon = True
         self.update_thread.start()
@@ -164,28 +118,21 @@ class SpeechUI:
         self.response_thread.daemon = True
         self.response_thread.start()
         
-        # Handle window close event
-        root.protocol("WM_DELETE_WINDOW", self.on_close)
-        
-        # Update UI state
-        self.update_ui_from_state()
+        print("Speech processor initialization complete!")
+        logger.info("Speech processor initialized successfully")
     
     def load_whisper_model(self):
         """Load the Whisper model in a background thread"""
         try:
             # Load the small model for a good balance of speed and accuracy
+            print("Loading Whisper model... This may take a few moments.")
+            print("(The model will be downloaded if this is the first time using it)")
             self.whisper_model = whisper.load_model("base")
             logger.info("Whisper model loaded successfully")
-            
-            # Update the UI to remove the loading label
-            self.root.after(0, self.loading_label.destroy)
+            print("Whisper model loaded successfully! Ready to transcribe speech.")
         except Exception as e:
             logger.error(f"Error loading Whisper model: {e}")
-            # Update the UI to show the error
-            self.root.after(0, lambda: self.loading_label.config(
-                text=f"Error loading Whisper model: {e}",
-                foreground="red"
-            ))
+            print(f"Error loading Whisper model: {e}")
     
     def load_speech_state(self):
         """Load the speech state from the file shared with the server"""
@@ -230,20 +177,10 @@ class SpeechUI:
         except Exception as e:
             logger.error(f"Error saving speech state: {e}")
     
-    def update_ui_from_state(self):
-        """Update the UI to reflect the current speech state"""
-        # Update status labels
-        self.user_status.config(
-            text=f"User: {'Listening' if self.listening else 'Idle'}")
-        self.agent_status.config(
-            text=f"Agent: {'Speaking' if self.speaking else 'Idle'}")
-        
-        # Update transcript display
-        self.transcript_text.delete(1.0, tk.END)
-        if self.last_transcript:
-            self.transcript_text.insert(tk.END, f"User: {self.last_transcript}\n")
-        if self.last_response:
-            self.transcript_text.insert(tk.END, f"Agent: {self.last_response}")
+    def update_state_from_file(self):
+        """Update the state based on the current file"""
+        # Reload the state from file
+        self.load_speech_state()
         
         # Start or stop audio processing based on state
         if self.listening and not self.stream:
@@ -255,24 +192,6 @@ class SpeechUI:
         """Start listening for audio input"""
         try:
             def audio_callback(in_data, frame_count, time_info, status):
-                # Process audio data for visualization
-                audio_data = np.frombuffer(in_data, dtype=np.int16)
-                # Normalize and prepare for visualization
-                normalized = audio_data.astype(float) / 32768.0
-                
-                # Calculate amplitude for visualization
-                amplitude = np.abs(normalized).mean() * 3  # Amplify for better visualization
-                
-                # Create circle data with some variation
-                angles = np.linspace(0, 2*np.pi, 360)
-                circle_data = np.ones(360) * (0.5 + amplitude)
-                # Add some variation
-                variation = np.sin(angles * 8) * amplitude * 0.3
-                circle_data += variation
-                
-                # Update visualizer
-                self.user_visualizer.update(None, circle_data)
-                
                 # Store audio data for processing
                 if hasattr(self, 'audio_frames'):
                     self.audio_frames.append(in_data)
@@ -292,11 +211,15 @@ class SpeechUI:
                 stream_callback=audio_callback
             )
             
+            print("Microphone activated. Listening for speech...")
+            logger.info("Started listening for audio input")
+            
             # Start a thread to detect silence and stop recording
             threading.Thread(target=self.detect_silence).start()
             
         except Exception as e:
             logger.error(f"Error starting audio stream: {e}")
+            print(f"Error starting audio: {e}")
             self.listening = False
             self.save_speech_state()
     
@@ -306,9 +229,9 @@ class SpeechUI:
             # Wait for initial audio to accumulate
             time.sleep(0.5)
             
-            silence_threshold = 0.01
+            silence_threshold = 0.005  # Reduced from 0.01 to be less sensitive
             silence_duration = 0
-            max_silence = 1.5  # seconds
+            max_silence = 2.0  # Increased from 1.5 to 2.0 seconds
             check_interval = 0.1
             
             while self.listening and self.stream and silence_duration < max_silence:
@@ -332,6 +255,7 @@ class SpeechUI:
             # If we exited because of silence detection
             if self.listening and self.stream:
                 logger.info("Silence detected, stopping recording")
+                print("Silence detected. Processing speech...")
                 self.process_recording()
                 self.stop_listening()
                 self.listening = False
@@ -370,10 +294,12 @@ class SpeechUI:
             
             # Use Whisper to transcribe the audio
             logger.info("Transcribing audio with Whisper...")
+            print("Transcribing audio with Whisper...")
             result = self.whisper_model.transcribe(temp_audio_path)
             transcription = result["text"].strip()
             
             logger.info(f"Transcription: {transcription}")
+            print(f"Transcription complete: \"{transcription}\"")
             
             # Clean up the temporary file
             try:
@@ -387,10 +313,6 @@ class SpeechUI:
             # Write the transcription to a file for the server to read
             with open(TRANSCRIPTION_FILE, 'w') as f:
                 f.write(transcription)
-            
-            # Update the UI
-            self.transcript_text.delete(1.0, tk.END)
-            self.transcript_text.insert(tk.END, f"User: {transcription}\n")
             
             # Update state
             self.save_speech_state()
@@ -408,12 +330,12 @@ class SpeechUI:
                 self.stream.stop_stream()
                 self.stream.close()
                 self.stream = None
-            
-            # Reset the visualizer
-            self.user_visualizer.update(None, np.zeros(360))
+                print("Microphone deactivated.")
+                logger.info("Stopped listening for audio input")
             
         except Exception as e:
             logger.error(f"Error stopping audio stream: {e}")
+            print(f"Error stopping audio: {e}")
     
     def check_for_updates(self):
         """Periodically check for updates to the speech state file"""
@@ -427,8 +349,7 @@ class SpeechUI:
                     current_modified = os.path.getmtime(STATE_FILE)
                     if current_modified > last_modified:
                         last_modified = current_modified
-                        self.load_speech_state()
-                        self.root.after(0, self.update_ui_from_state)
+                        self.update_state_from_file()
             except Exception as e:
                 logger.error(f"Error checking for updates: {e}")
             
@@ -452,72 +373,41 @@ class SpeechUI:
                         self.speaking = True
                         self.save_speech_state()
                         
-                        # Update UI
-                        self.root.after(0, lambda: self.agent_status.config(
-                            text="Agent: Speaking"))
-                        self.root.after(0, lambda: self.transcript_text.insert(
-                            tk.END, f"Agent: {response}"))
+                        logger.info(f"Speaking: {response}")
+                        print(f"Speaking: \"{response}\"")
                         
-                        # Speak the response with TTS and visualize
-                        threading.Thread(target=self.speak_text, args=(response,)).start()
+                        # Use actual text-to-speech if available
+                        if tts_available:
+                            try:
+                                # Use pyttsx3 for actual speech
+                                tts_engine.say(response)
+                                tts_engine.runAndWait()
+                                print("Speech completed.")
+                            except Exception as e:
+                                logger.error(f"Error using text-to-speech: {e}")
+                                print(f"Error using text-to-speech: {e}")
+                                # Fall back to simulated speech
+                                speaking_duration = len(response) * 0.05  # 50ms per character
+                                time.sleep(speaking_duration)
+                        else:
+                            # Simulate speaking time if TTS not available
+                            speaking_duration = len(response) * 0.05  # 50ms per character
+                            time.sleep(speaking_duration)
+                        
+                        # Update state when done speaking
+                        self.speaking = False
+                        self.save_speech_state()
+                        print("Done speaking.")
+                        logger.info("Done speaking")
             except Exception as e:
                 logger.error(f"Error checking for responses: {e}")
             
             time.sleep(0.5)  # Check every half second
     
-    def speak_text(self, text):
-        """Use TTS to speak the text and visualize the audio"""
+    def shutdown(self):
+        """Clean up resources and shut down"""
         try:
-            # For now, we'll use a simulated TTS by visualizing the "speech"
-            # In a real implementation, you would use a TTS library here
-            
-            # Calculate speaking duration based on text length
-            duration = len(text) * 0.05  # 50ms per character
-            
-            # Number of frames to generate
-            num_frames = int(duration * 20)  # 20 frames per second
-            
-            for i in range(num_frames):
-                if not self.should_update:
-                    break
-                
-                # Generate a dynamic circle visualization
-                t = i / num_frames
-                base_amplitude = 0.5 + 0.3 * np.sin(t * 2 * np.pi * 2)
-                
-                angles = np.linspace(0, 2*np.pi, 360)
-                circle_data = np.ones(360) * base_amplitude
-                
-                # Add some variation based on position in the text
-                variation = np.sin(angles * 8 + t * 20) * 0.2
-                circle_data += variation
-                
-                # Update the visualizer
-                self.agent_visualizer.update(None, circle_data)
-                
-                # Update the canvas
-                self.canvas.draw_idle()
-                
-                # Sleep to control animation speed
-                time.sleep(0.05)
-            
-            # Reset the visualizer when done
-            self.agent_visualizer.update(None, np.zeros(360))
-            
-            # Update state when done speaking
-            self.speaking = False
-            self.save_speech_state()
-            self.root.after(0, lambda: self.agent_status.config(
-                text="Agent: Idle"))
-            
-        except Exception as e:
-            logger.error(f"Error in text-to-speech: {e}")
-            self.speaking = False
-            self.save_speech_state()
-    
-    def on_close(self):
-        """Handle window close event"""
-        try:
+            print("\nShutting down speech processor...")
             self.should_update = False
             
             if self.stream:
@@ -532,16 +422,33 @@ class SpeechUI:
             self.speaking = False
             self.save_speech_state()
             
-            self.root.destroy()
+            print("Speech processor shut down successfully.")
+            logger.info("Speech processor shut down")
             
         except Exception as e:
-            logger.error(f"Error closing UI: {e}")
-            self.root.destroy()
+            logger.error(f"Error shutting down speech processor: {e}")
+            print(f"Error during shutdown: {e}")
 
 def main():
-    root = tk.Tk()
-    app = SpeechUI(root)
-    root.mainloop()
+    """Main entry point for the speech processor"""
+    try:
+        print("\n===== Speech MCP Processor =====")
+        print("Starting speech recognition system...")
+        processor = SimpleSpeechProcessor()
+        
+        print("\nSpeech processor is running. Press Ctrl+C to exit.")
+        # Keep the main thread alive
+        while True:
+            try:
+                time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("Keyboard interrupt received, shutting down")
+                processor.shutdown()
+                print("Speech processor shut down.")
+                break
+    except Exception as e:
+        logger.error(f"Error in speech processor main: {e}")
+        print(f"\nERROR: Failed to start speech processor: {e}")
 
 if __name__ == "__main__":
     main()

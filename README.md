@@ -6,16 +6,15 @@ A Goose MCP extension for voice interaction with audio visualization.
 
 Speech MCP provides a voice interface for Goose, allowing users to interact through speech rather than text. It includes:
 
-- Real-time audio visualization for both user and agent speech
+- Real-time audio processing for speech recognition
 - Local speech-to-text using OpenAI's Whisper model
-- Text-to-speech capabilities with audio visualization
-- A simple but effective UI with circular audio visualizers
+- Text-to-speech capabilities 
+- Simple command-line interface for voice interaction
 
 ## Features
 
 - **Voice Input**: Capture and transcribe user speech using Whisper
 - **Voice Output**: Convert agent responses to speech
-- **Audio Visualization**: Visual feedback for both user and agent audio
 - **Continuous Conversation**: Automatically listen for user input after agent responses
 - **Silence Detection**: Automatically stops recording when the user stops speaking
 
@@ -32,9 +31,8 @@ Speech MCP provides a voice interface for Goose, allowing users to interact thro
 - Python 3.10+
 - PyAudio (for audio capture)
 - OpenAI Whisper (for speech-to-text)
-- NumPy and Matplotlib (for audio visualization)
+- NumPy (for audio processing)
 - Pydub (for audio processing)
-- Tkinter (for UI components)
 
 ## Usage
 
@@ -87,13 +85,6 @@ The MCP uses OpenAI's Whisper model for speech recognition:
 - Uses the "base" model for a good balance of accuracy and speed
 - Processes audio locally without sending data to external services
 - Automatically detects when the user has finished speaking
-
-### Audio Visualization
-
-- Real-time circular visualizers show audio activity
-- Left visualizer displays user's speech input
-- Right visualizer displays agent's speech output
-- Amplitude and variations in the audio affect the visualization pattern
 
 ## License
 

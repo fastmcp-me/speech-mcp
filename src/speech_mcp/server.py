@@ -4,6 +4,7 @@ import os
 import json
 import logging
 import time
+import threading
 from typing import Dict, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -75,40 +76,79 @@ def ensure_ui_running():
     if speech_state["ui_active"] and speech_state["ui_process"] is not None:
         # Check if the process is still running
         if speech_state["ui_process"].poll() is None:
+            logger.info("UI process is already running")
             return True
+        else:
+            logger.warning("UI process has terminated unexpectedly")
     
     # UI is not running, start it
     try:
         # Kill any existing UI process
         if speech_state["ui_process"] is not None:
             try:
+                logger.info("Terminating existing UI process")
                 speech_state["ui_process"].terminate()
-            except:
-                pass
+                time.sleep(1)  # Give it time to terminate
+            except Exception as e:
+                logger.error(f"Error terminating UI process: {e}")
         
         # Start a new UI process
         python_executable = sys.executable
-        script_path = os.path.join(os.path.dirname(__file__), "ui", "__init__.py")
-        speech_state["ui_process"] = subprocess.Popen([python_executable, script_path])
+        
+        # Use the module import approach instead of direct file path
+        logger.info(f"Starting UI process with Python module import")
+        print(f"Starting UI process with Python module import")
+        
+        # Start the process with stdout and stderr redirected
+        speech_state["ui_process"] = subprocess.Popen(
+            [python_executable, "-m", "speech_mcp.ui"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Start threads to monitor the process output
+        def log_output(stream, level):
+            for line in stream:
+                # Clean up the line to remove any file references that might be in the output
+                clean_line = line.strip()
+                if level == "info":
+                    logger.info(f"UI: {clean_line}")
+                    print(f"UI: {clean_line}")
+                else:
+                    logger.error(f"UI Error: {clean_line}")
+                    print(f"UI Error: {clean_line}")
+        
+        threading.Thread(target=log_output, args=(speech_state["ui_process"].stdout, "info"), daemon=True).start()
+        threading.Thread(target=log_output, args=(speech_state["ui_process"].stderr, "error"), daemon=True).start()
+        
         speech_state["ui_active"] = True
         
         # Save the updated state
         save_speech_state(speech_state)
         
         # Give the UI time to start up
-        time.sleep(1)
+        time.sleep(2)  # Increased from 1 to 2 seconds
         
+        # Check if the process is still running
+        if speech_state["ui_process"].poll() is not None:
+            exit_code = speech_state["ui_process"].poll()
+            logger.error(f"UI process exited immediately with code {exit_code}")
+            return False
+        
+        logger.info("UI process started successfully")
         return True
     except Exception as e:
         logger.error(f"Failed to start UI: {e}")
+        print(f"Failed to start UI: {e}")
         return False
 
 @mcp.tool()
 def start_voice_mode() -> str:
     """
-    Start the voice mode UI with audio visualizers.
+    Start the voice mode for speech recognition.
     
-    This will open a separate window with audio visualizers for both user and agent speech.
+    This will initialize the speech recognition system.
     """
     global speech_state
     
@@ -116,12 +156,12 @@ def start_voice_mode() -> str:
     speech_state = load_speech_state()
     
     if ensure_ui_running():
-        return "Voice mode activated. The UI is now open with audio visualizers. Note that Whisper model loading may take a moment on first use."
+        return "Voice mode activated. The speech recognition system is initializing. Note that Whisper model loading may take a moment on first use. Please wait for the 'Whisper model loaded successfully!' message in the terminal before proceeding."
     else:
         raise McpError(
             ErrorData(
                 INTERNAL_ERROR,
-                "Failed to start the voice mode UI."
+                "Failed to start the speech recognition system."
             )
         )
 
@@ -130,7 +170,7 @@ def listen() -> str:
     """
     Start listening for user speech and return the transcription.
     
-    This will activate the microphone and visualize the audio input until the user stops speaking.
+    This will activate the microphone and listen until the user stops speaking.
     Returns:
         A string containing the transcription of the user's speech.
     """
@@ -144,13 +184,16 @@ def listen() -> str:
         raise McpError(
             ErrorData(
                 INTERNAL_ERROR,
-                "Failed to start the voice mode UI for listening."
+                "Failed to start the speech recognition system for listening."
             )
         )
     
     # Set listening state
     speech_state["listening"] = True
     save_speech_state(speech_state)
+    
+    logger.info("Starting to listen for speech input...")
+    print("\nListening for speech input... Speak now.")
     
     try:
         # Wait for the transcription file to be created by the UI
@@ -160,11 +203,14 @@ def listen() -> str:
         if os.path.exists(TRANSCRIPTION_FILE):
             os.remove(TRANSCRIPTION_FILE)
         
-        timeout = 60  # 60 seconds timeout
+        timeout = 120  # 120 seconds timeout (increased from 60)
         start_time = time.time()
         
         while not os.path.exists(TRANSCRIPTION_FILE) and time.time() - start_time < timeout:
             time.sleep(0.5)
+            # Print a message every 10 seconds to indicate we're still waiting
+            if (time.time() - start_time) % 10 < 0.5:
+                print(f"Still waiting for speech input... ({int(time.time() - start_time)} seconds elapsed)")
         
         if not os.path.exists(TRANSCRIPTION_FILE):
             speech_state["listening"] = False
@@ -181,6 +227,7 @@ def listen() -> str:
             transcription = f.read().strip()
         
         logger.info(f"Received transcription: {transcription}")
+        print(f"Transcription received: \"{transcription}\"")
         
         # Delete the file to prepare for the next transcription
         os.remove(TRANSCRIPTION_FILE)
@@ -207,7 +254,7 @@ def listen() -> str:
 @mcp.tool()
 def speak(text: str) -> str:
     """
-    Convert text to speech and play it through the audio visualizer.
+    Convert text to speech.
     
     Args:
         text: The text to be spoken
@@ -225,7 +272,7 @@ def speak(text: str) -> str:
         raise McpError(
             ErrorData(
                 INTERNAL_ERROR,
-                "Failed to start the voice mode UI for speaking."
+                "Failed to start the speech recognition system for speaking."
             )
         )
     
@@ -244,6 +291,7 @@ def speak(text: str) -> str:
     
     try:
         logger.info(f"Speaking: {text}")
+        print(f"\nSpeaking: \"{text}\"")
         
         # Write the text to a file for the UI to process
         with open(RESPONSE_FILE, 'w') as f:
@@ -266,6 +314,7 @@ def speak(text: str) -> str:
         speech_state["speaking"] = False
         save_speech_state(speech_state)
         
+        print("Done speaking.")
         return f"Spoke: {text}"
     except Exception as e:
         # Update state on error
@@ -311,29 +360,29 @@ def usage_guide() -> str:
     return """
     # Speech MCP Usage Guide
     
-    This MCP extension provides voice interaction capabilities with audio visualization.
+    This MCP extension provides voice interaction capabilities.
     
     ## How to Use
     
-    1. Start the voice mode UI:
+    1. Start the voice mode:
        ```
        start_voice_mode()
        ```
-       This opens a window with two audio visualizers - one for user input and one for agent output.
+       This initializes the speech recognition system.
        Note: The first time you run this, it will download the Whisper model which may take a moment.
     
     2. Listen for user speech:
        ```
        transcript = listen()
        ```
-       This activates the microphone and visualizes the audio input until the user stops speaking.
+       This activates the microphone and listens until the user stops speaking.
        The function returns the transcription of the speech using OpenAI's Whisper model.
     
     3. Respond with speech:
        ```
        speak("Your response text here")
        ```
-       This converts the text to speech and plays it through the audio visualizer.
+       This converts the text to speech.
     
     4. Check the current state:
        ```
@@ -343,7 +392,7 @@ def usage_guide() -> str:
     
     ## Typical Workflow
     
-    1. Start the voice mode UI
+    1. Start the voice mode
     2. Listen for user input
     3. Process the transcribed speech
     4. Respond with speech
@@ -370,8 +419,6 @@ def usage_guide() -> str:
     
     ## Tips
     
-    - The UI visualizes audio in real-time using circular audio visualizers
-    - The left visualizer shows user input, the right one shows agent output
     - For best results, use a quiet environment and speak clearly
     - The system automatically detects silence to know when you've finished speaking
     """

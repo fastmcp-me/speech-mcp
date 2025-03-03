@@ -16,11 +16,11 @@ logging.basicConfig(
 )
 
 def main():
-    """Speech MCP: Voice interaction with audio visualization UI."""
+    """Speech MCP: Voice interaction with speech recognition."""
     logging.info("Starting Speech MCP server...")
     try:
         parser = argparse.ArgumentParser(
-            description="Voice interaction with audio visualization UI."
+            description="Voice interaction with speech recognition."
         )
         parser.parse_args()
         logging.info("Running MCP server...")
