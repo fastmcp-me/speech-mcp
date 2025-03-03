@@ -13,10 +13,13 @@ import pyaudio
 import wave
 import logging
 import math
+import whisper
+import tempfile
 from queue import Queue
 import threading
-import random
-import tempfile
+from pydub import AudioSegment
+from pydub.playback import play
+import io
 
 # Set up logging
 logging.basicConfig(
@@ -130,6 +133,20 @@ class SpeechUI:
         self.p = pyaudio.PyAudio()
         self.stream = None
         
+        # Initialize Whisper model (load the small model for faster processing)
+        logger.info("Loading Whisper model...")
+        self.loading_label = ttk.Label(
+            main_frame,
+            text="Loading Whisper model... Please wait...",
+            font=('Arial', 12)
+        )
+        self.loading_label.pack(pady=10)
+        self.root.update()
+        
+        # Load the model in a separate thread to avoid blocking the UI
+        self.whisper_model = None
+        threading.Thread(target=self.load_whisper_model).start()
+        
         # Animation for visualizers
         self.ani1 = animation.FuncAnimation(
             self.fig, self.user_visualizer.update, interval=50, blit=True)
@@ -152,6 +169,23 @@ class SpeechUI:
         
         # Update UI state
         self.update_ui_from_state()
+    
+    def load_whisper_model(self):
+        """Load the Whisper model in a background thread"""
+        try:
+            # Load the small model for a good balance of speed and accuracy
+            self.whisper_model = whisper.load_model("base")
+            logger.info("Whisper model loaded successfully")
+            
+            # Update the UI to remove the loading label
+            self.root.after(0, self.loading_label.destroy)
+        except Exception as e:
+            logger.error(f"Error loading Whisper model: {e}")
+            # Update the UI to show the error
+            self.root.after(0, lambda: self.loading_label.config(
+                text=f"Error loading Whisper model: {e}",
+                foreground="red"
+            ))
     
     def load_speech_state(self):
         """Load the speech state from the file shared with the server"""
@@ -307,25 +341,47 @@ class SpeechUI:
             logger.error(f"Error in silence detection: {e}")
     
     def process_recording(self):
-        """Process the recorded audio and generate a transcription"""
+        """Process the recorded audio and generate a transcription using Whisper"""
         try:
             if not hasattr(self, 'audio_frames') or not self.audio_frames:
                 logger.warning("No audio frames to process")
                 return
             
-            # In a real implementation, this would use whisper to transcribe
-            # For now, we'll simulate a transcription
+            if self.whisper_model is None:
+                logger.warning("Whisper model not loaded yet")
+                self.last_transcript = "Sorry, speech recognition model is still loading. Please try again in a moment."
+                with open(TRANSCRIPTION_FILE, 'w') as f:
+                    f.write(self.last_transcript)
+                return
             
-            # Generate a simulated transcription
-            sample_phrases = [
-                "Hello, how can you help me today?",
-                "What's the weather like?",
-                "Tell me a joke.",
-                "I need help with my project.",
-                "Can you explain how this works?"
-            ]
+            # Save the recorded audio to a temporary WAV file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+                temp_audio_path = temp_audio.name
+                
+                # Create a WAV file from the recorded frames
+                wf = wave.open(temp_audio_path, 'wb')
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(self.p.get_sample_size(FORMAT))
+                wf.setframerate(RATE)
+                wf.writeframes(b''.join(self.audio_frames))
+                wf.close()
             
-            transcription = random.choice(sample_phrases)
+            logger.info(f"Audio saved to temporary file: {temp_audio_path}")
+            
+            # Use Whisper to transcribe the audio
+            logger.info("Transcribing audio with Whisper...")
+            result = self.whisper_model.transcribe(temp_audio_path)
+            transcription = result["text"].strip()
+            
+            logger.info(f"Transcription: {transcription}")
+            
+            # Clean up the temporary file
+            try:
+                os.unlink(temp_audio_path)
+            except Exception as e:
+                logger.error(f"Error removing temporary file: {e}")
+            
+            # Update the state with the transcription
             self.last_transcript = transcription
             
             # Write the transcription to a file for the server to read
@@ -341,6 +397,9 @@ class SpeechUI:
             
         except Exception as e:
             logger.error(f"Error processing recording: {e}")
+            self.last_transcript = f"Error processing speech: {str(e)}"
+            with open(TRANSCRIPTION_FILE, 'w') as f:
+                f.write(self.last_transcript)
     
     def stop_listening(self):
         """Stop listening for audio input"""
@@ -399,22 +458,19 @@ class SpeechUI:
                         self.root.after(0, lambda: self.transcript_text.insert(
                             tk.END, f"Agent: {response}"))
                         
-                        # Simulate speaking with visualizer
-                        self.simulate_speaking(response)
-                        
-                        # Update state when done speaking
-                        self.speaking = False
-                        self.save_speech_state()
-                        self.root.after(0, lambda: self.agent_status.config(
-                            text="Agent: Idle"))
+                        # Speak the response with TTS and visualize
+                        threading.Thread(target=self.speak_text, args=(response,)).start()
             except Exception as e:
                 logger.error(f"Error checking for responses: {e}")
             
             time.sleep(0.5)  # Check every half second
     
-    def simulate_speaking(self, text):
-        """Simulate speaking with audio visualizer animation"""
+    def speak_text(self, text):
+        """Use TTS to speak the text and visualize the audio"""
         try:
+            # For now, we'll use a simulated TTS by visualizing the "speech"
+            # In a real implementation, you would use a TTS library here
+            
             # Calculate speaking duration based on text length
             duration = len(text) * 0.05  # 50ms per character
             
@@ -448,8 +504,16 @@ class SpeechUI:
             # Reset the visualizer when done
             self.agent_visualizer.update(None, np.zeros(360))
             
+            # Update state when done speaking
+            self.speaking = False
+            self.save_speech_state()
+            self.root.after(0, lambda: self.agent_status.config(
+                text="Agent: Idle"))
+            
         except Exception as e:
-            logger.error(f"Error simulating speaking: {e}")
+            logger.error(f"Error in text-to-speech: {e}")
+            self.speaking = False
+            self.save_speech_state()
     
     def on_close(self):
         """Handle window close event"""

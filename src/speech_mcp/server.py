@@ -14,6 +14,8 @@ mcp = FastMCP("speech")
 
 # Path to save speech state
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech_state.json")
+TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcription.txt")
+RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
 
 # Default speech state
 DEFAULT_SPEECH_STATE = {
@@ -24,6 +26,17 @@ DEFAULT_SPEECH_STATE = {
     "last_transcript": "",
     "last_response": ""
 }
+
+# Set up logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech-mcp-server.log")),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Load speech state from file or use default
 def load_speech_state():
@@ -37,7 +50,7 @@ def load_speech_state():
         else:
             return DEFAULT_SPEECH_STATE.copy()
     except Exception as e:
-        logging.error(f"Error loading speech state: {e}")
+        logger.error(f"Error loading speech state: {e}")
         return DEFAULT_SPEECH_STATE.copy()
 
 # Save speech state to file
@@ -50,7 +63,7 @@ def save_speech_state(state):
         with open(STATE_FILE, 'w') as f:
             json.dump(state_copy, f)
     except Exception as e:
-        logging.error(f"Error saving speech state: {e}")
+        logger.error(f"Error saving speech state: {e}")
 
 # Initialize speech state
 speech_state = load_speech_state()
@@ -87,7 +100,7 @@ def ensure_ui_running():
         
         return True
     except Exception as e:
-        logging.error(f"Failed to start UI: {e}")
+        logger.error(f"Failed to start UI: {e}")
         return False
 
 @mcp.tool()
@@ -103,7 +116,7 @@ def start_voice_mode() -> str:
     speech_state = load_speech_state()
     
     if ensure_ui_running():
-        return "Voice mode activated. The UI is now open with audio visualizers."
+        return "Voice mode activated. The UI is now open with audio visualizers. Note that Whisper model loading may take a moment on first use."
     else:
         raise McpError(
             ErrorData(
@@ -140,18 +153,22 @@ def listen() -> str:
     save_speech_state(speech_state)
     
     try:
-        # In a real implementation, this would use whisper to transcribe audio
-        # For now, we'll simulate by reading from a file that the UI will write to
-        transcription_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcription.txt")
-        
         # Wait for the transcription file to be created by the UI
+        logger.info("Waiting for speech input and transcription...")
+        
+        # Delete any existing transcription file to avoid using old data
+        if os.path.exists(TRANSCRIPTION_FILE):
+            os.remove(TRANSCRIPTION_FILE)
+        
         timeout = 60  # 60 seconds timeout
         start_time = time.time()
         
-        while not os.path.exists(transcription_file) and time.time() - start_time < timeout:
+        while not os.path.exists(TRANSCRIPTION_FILE) and time.time() - start_time < timeout:
             time.sleep(0.5)
         
-        if not os.path.exists(transcription_file):
+        if not os.path.exists(TRANSCRIPTION_FILE):
+            speech_state["listening"] = False
+            save_speech_state(speech_state)
             raise McpError(
                 ErrorData(
                     INTERNAL_ERROR,
@@ -160,11 +177,13 @@ def listen() -> str:
             )
         
         # Read the transcription
-        with open(transcription_file, 'r') as f:
+        with open(TRANSCRIPTION_FILE, 'r') as f:
             transcription = f.read().strip()
         
+        logger.info(f"Received transcription: {transcription}")
+        
         # Delete the file to prepare for the next transcription
-        os.remove(transcription_file)
+        os.remove(TRANSCRIPTION_FILE)
         
         # Update state
         speech_state["listening"] = False
@@ -177,6 +196,7 @@ def listen() -> str:
         speech_state["listening"] = False
         save_speech_state(speech_state)
         
+        logger.error(f"Error during speech recognition: {e}")
         raise McpError(
             ErrorData(
                 INTERNAL_ERROR,
@@ -223,14 +243,24 @@ def speak(text: str) -> str:
     save_speech_state(speech_state)
     
     try:
-        # In a real implementation, this would use TTS to generate audio
-        # For now, we'll simulate by writing to a file that the UI will read
-        response_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
-        with open(response_file, 'w') as f:
+        logger.info(f"Speaking: {text}")
+        
+        # Write the text to a file for the UI to process
+        with open(RESPONSE_FILE, 'w') as f:
             f.write(text)
         
         # Give the UI time to process and "speak" the text
-        time.sleep(len(text) * 0.05)  # Simulate speech time based on text length
+        # We'll estimate the speaking time based on text length
+        # Average speaking rate is about 150 words per minute or 2.5 words per second
+        # Assuming an average of 5 characters per word
+        words = len(text) / 5
+        speaking_time = words / 2.5  # Time in seconds
+        
+        # Add a small buffer
+        speaking_time += 1.0
+        
+        # Wait for the estimated speaking time
+        time.sleep(speaking_time)
         
         # Update state
         speech_state["speaking"] = False
@@ -242,6 +272,7 @@ def speak(text: str) -> str:
         speech_state["speaking"] = False
         save_speech_state(speech_state)
         
+        logger.error(f"Error during text-to-speech: {e}")
         raise McpError(
             ErrorData(
                 INTERNAL_ERROR,
@@ -289,13 +320,14 @@ def usage_guide() -> str:
        start_voice_mode()
        ```
        This opens a window with two audio visualizers - one for user input and one for agent output.
+       Note: The first time you run this, it will download the Whisper model which may take a moment.
     
     2. Listen for user speech:
        ```
        transcript = listen()
        ```
        This activates the microphone and visualizes the audio input until the user stops speaking.
-       The function returns the transcription of the speech.
+       The function returns the transcription of the speech using OpenAI's Whisper model.
     
     3. Respond with speech:
        ```
@@ -317,9 +349,29 @@ def usage_guide() -> str:
     4. Respond with speech
     5. Listen again for the next user input
     
+    ## Example Conversation Flow
+    
+    ```python
+    # Start the voice mode
+    start_voice_mode()
+    
+    # Listen for the user's question
+    user_input = listen()
+    
+    # Process the input and generate a response
+    # ...
+    
+    # Speak the response
+    speak("Here's my response to your question.")
+    
+    # Listen for follow-up
+    next_input = listen()
+    ```
+    
     ## Tips
     
     - The UI visualizes audio in real-time using circular audio visualizers
     - The left visualizer shows user input, the right one shows agent output
     - For best results, use a quiet environment and speak clearly
+    - The system automatically detects silence to know when you've finished speaking
     """
