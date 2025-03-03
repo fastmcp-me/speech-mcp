@@ -78,12 +78,12 @@ def load_speech_recognition():
         print("Please install it with: pip install SpeechRecognition")
         return False
 
-class SpeechProcessorUI:
-    """A speech processor with a simple GUI"""
+class SimpleSpeechProcessorUI:
+    """A very simple speech processor UI that just shows status"""
     def __init__(self, root):
         self.root = root
         self.root.title("Speech MCP")
-        self.root.geometry("400x300")
+        self.root.geometry("300x100")
         
         # Initialize basic components
         print("Initializing speech processor...")
@@ -102,14 +102,16 @@ class SpeechProcessorUI:
         # Load speech state
         self.load_speech_state()
         
-        # Create the UI components
-        self.create_ui()
+        # Create the UI components - just a status label
+        self.status_label = tk.Label(
+            self.root, 
+            text="Initializing...", 
+            font=('Arial', 16)
+        )
+        self.status_label.pack(expand=True, fill="both", padx=20, pady=20)
         
-        # Load whisper
+        # Load whisper in a background thread
         print("Checking for speech recognition module...")
-        self.status_label.config(text="Loading speech recognition model...")
-        
-        # Load whisper in a separate thread to avoid freezing the UI
         threading.Thread(target=self.initialize_speech_recognition, daemon=True).start()
         
         # Start threads for monitoring state changes
@@ -128,52 +130,6 @@ class SpeechProcessorUI:
         print("Speech processor initialization complete!")
         logger.info("Speech processor initialized successfully")
     
-    def create_ui(self):
-        """Create the UI components"""
-        # Status label
-        self.status_label = tk.Label(
-            self.root, 
-            text="Initializing...", 
-            font=('Arial', 12)
-        )
-        self.status_label.pack(pady=10)
-        
-        # Transcript frame
-        transcript_frame = tk.LabelFrame(self.root, text="Last Transcript", padx=5, pady=5)
-        transcript_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        
-        self.transcript_text = tk.Text(transcript_frame, height=4, wrap="word")
-        self.transcript_text.pack(fill="both", expand=True)
-        self.transcript_text.insert("1.0", "No transcript yet")
-        self.transcript_text.config(state="disabled")
-        
-        # Response frame
-        response_frame = tk.LabelFrame(self.root, text="Last Response", padx=5, pady=5)
-        response_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        
-        self.response_text = tk.Text(response_frame, height=4, wrap="word")
-        self.response_text.pack(fill="both", expand=True)
-        self.response_text.insert("1.0", "No response yet")
-        self.response_text.config(state="disabled")
-        
-        # Button frame
-        button_frame = tk.Frame(self.root)
-        button_frame.pack(pady=10)
-        
-        self.listen_button = tk.Button(
-            button_frame,
-            text="Listen",
-            command=self.toggle_listening
-        )
-        self.listen_button.pack(side="left", padx=5)
-        
-        self.speak_button = tk.Button(
-            button_frame,
-            text="Test Speech",
-            command=self.test_speech
-        )
-        self.speak_button.pack(side="left", padx=5)
-    
     def initialize_speech_recognition(self):
         """Initialize speech recognition in a background thread"""
         if not load_whisper():
@@ -185,21 +141,21 @@ class SpeechProcessorUI:
         # Load the whisper model
         try:
             self.root.after(0, lambda: self.status_label.config(
-                text="Loading Whisper model... This may take a few moments."
+                text="Loading Whisper model..."
             ))
             
             # Load the small model for a good balance of speed and accuracy
             self.whisper_model = whisper.load_model("base")
             
             self.root.after(0, lambda: self.status_label.config(
-                text="Ready! Whisper model loaded successfully."
+                text="Ready"
             ))
             
             logger.info("Whisper model loaded successfully")
         except Exception as e:
             logger.error(f"Error loading Whisper model: {e}")
             self.root.after(0, lambda: self.status_label.config(
-                text=f"Error loading Whisper model: {e}"
+                text=f"Error loading model: {e}"
             ))
     
     def load_speech_state(self):
@@ -247,34 +203,12 @@ class SpeechProcessorUI:
     
     def update_ui_from_state(self):
         """Update the UI to reflect the current speech state"""
-        # Update status label
         if self.listening:
             self.status_label.config(text="Listening...")
-            self.listen_button.config(text="Stop Listening")
         elif self.speaking:
             self.status_label.config(text="Speaking...")
         else:
             self.status_label.config(text="Ready")
-            self.listen_button.config(text="Listen")
-        
-        # Update transcript text
-        self.transcript_text.config(state="normal")
-        self.transcript_text.delete("1.0", "end")
-        self.transcript_text.insert("1.0", self.last_transcript if self.last_transcript else "No transcript yet")
-        self.transcript_text.config(state="disabled")
-        
-        # Update response text
-        self.response_text.config(state="normal")
-        self.response_text.delete("1.0", "end")
-        self.response_text.insert("1.0", self.last_response if self.last_response else "No response yet")
-        self.response_text.config(state="disabled")
-    
-    def toggle_listening(self):
-        """Toggle listening mode on/off"""
-        if self.listening:
-            self.stop_listening()
-        else:
-            self.start_listening()
     
     def start_listening(self):
         """Start listening for audio input"""
@@ -298,11 +232,6 @@ class SpeechProcessorUI:
                 frames_per_buffer=CHUNK,
                 stream_callback=audio_callback
             )
-            
-            # Update state
-            self.listening = True
-            self.save_speech_state()
-            self.update_ui_from_state()
             
             print("Microphone activated. Listening for speech...")
             logger.info("Started listening for audio input")
@@ -369,7 +298,6 @@ class SpeechProcessorUI:
                 self.last_transcript = "Sorry, speech recognition model is still loading. Please try again in a moment."
                 with open(TRANSCRIPTION_FILE, 'w') as f:
                     f.write(self.last_transcript)
-                self.update_ui_from_state()
                 return
             
             # Save the recorded audio to a temporary WAV file
@@ -410,16 +338,14 @@ class SpeechProcessorUI:
             with open(TRANSCRIPTION_FILE, 'w') as f:
                 f.write(transcription)
             
-            # Update state and UI
+            # Update state
             self.save_speech_state()
-            self.update_ui_from_state()
             
         except Exception as e:
             logger.error(f"Error processing recording: {e}")
             self.last_transcript = f"Error processing speech: {str(e)}"
             with open(TRANSCRIPTION_FILE, 'w') as f:
                 f.write(self.last_transcript)
-            self.update_ui_from_state()
     
     def stop_listening(self):
         """Stop listening for audio input"""
@@ -439,20 +365,6 @@ class SpeechProcessorUI:
         except Exception as e:
             logger.error(f"Error stopping audio stream: {e}")
             print(f"Error stopping audio: {e}")
-    
-    def test_speech(self):
-        """Test the text-to-speech functionality"""
-        test_text = "This is a test of the speech synthesis system."
-        
-        # Create a response file for the server to process
-        with open(RESPONSE_FILE, 'w') as f:
-            f.write(test_text)
-        
-        # Update state
-        self.speaking = True
-        self.last_response = test_text
-        self.save_speech_state()
-        self.update_ui_from_state()
     
     def check_for_updates(self):
         """Periodically check for updates to the speech state file"""
@@ -556,10 +468,10 @@ def main():
     """Main entry point for the speech processor"""
     try:
         print("\n===== Speech MCP Processor =====")
-        print("Starting speech recognition system with UI...")
+        print("Starting speech recognition system...")
         
         root = tk.Tk()
-        app = SpeechProcessorUI(root)
+        app = SimpleSpeechProcessorUI(root)
         root.mainloop()
     except Exception as e:
         logger.error(f"Error in speech processor main: {e}")
