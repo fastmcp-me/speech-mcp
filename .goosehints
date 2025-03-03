@@ -2,7 +2,7 @@
   "project": {
     "name": "speech-mcp",
     "description": "Speech MCP extension for Goose that provides voice interaction with audio visualization",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "type": "goose_extension",
     "python_min_version": "3.10"
   },
@@ -75,13 +75,13 @@
       "numpy>=1.24.0",
       "pyaudio>=0.2.13",
       "pydub>=0.25.1",
-      "openai-whisper>=20231117",
+      "faster-whisper>=0.10.0",
       "numba>=0.57.0",
       "pyttsx3>=2.90"
     ],
     "key_components": {
       "speech_recognition": {
-        "primary": "openai-whisper",
+        "primary": "faster-whisper",
         "fallback": "SpeechRecognition"
       },
       "audio_processing": ["pyaudio", "numpy", "pydub"],
@@ -145,7 +145,8 @@
     "listen_timeout": "Increased timeout from 60s to 10min, reduced silence threshold",
     "speech_synthesis": "Added pyttsx3 for text-to-speech with fallback to simulation",
     "ui_startup": "Enhanced error handling, improved process management, fixed path issues",
-    "api_simplification": "Reduced API to just start_conversation() and reply() functions"
+    "api_simplification": "Reduced API to just start_conversation() and reply() functions",
+    "speech_recognition": "Migrated from openai-whisper to faster-whisper for improved performance"
   },
   "installation": {
     "methods": [
@@ -186,7 +187,7 @@
       },
       {
         "issue": "Speech recognition failing",
-        "check": "Check if Whisper model is downloaded",
+        "check": "Check if faster-whisper model is downloaded",
         "solution": "First run may take time to download the model"
       }
     ]

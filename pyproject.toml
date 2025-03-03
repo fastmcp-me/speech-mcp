@@ -1,18 +1,19 @@
 [project]
 name = "speech-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Speech MCP Server with command-line interface"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.2.0",
-    "SpeechRecognition>=3.10.0",  # Using SpeechRecognition instead of Whisper
+    "SpeechRecognition>=3.10.0",  # Fallback speech recognition
     "numpy>=1.24.0",
     "pyaudio>=0.2.13",
     "pydub>=0.25.1",
-    "openai-whisper>=20231117",
+    "faster-whisper>=0.10.0",  # Using faster-whisper instead of openai-whisper
     "numba>=0.57.0",  # Specify a newer version of numba that supports Python 3.10
-    "pyttsx3>=2.90"   # Add pyttsx3 for text-to-speech
+    "pyttsx3>=2.90",   # Add pyttsx3 for text-to-speech
+    "psutil>=5.9.0"    # Add psutil for process management
 ]
 
 [project.scripts]

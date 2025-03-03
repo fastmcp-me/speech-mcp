@@ -69,15 +69,15 @@ def load_whisper():
     global whisper_loaded
     try:
         global whisper
-        print("Loading Whisper speech recognition model... This may take a moment.")
-        import whisper
+        print("Loading faster-whisper speech recognition model... This may take a moment.")
+        import faster_whisper
         whisper_loaded = True
-        logger.info("Whisper successfully loaded")
-        print("Whisper speech recognition model loaded successfully!")
+        logger.info("faster-whisper successfully loaded")
+        print("faster-whisper speech recognition model loaded successfully!")
         return True
     except ImportError as e:
-        logger.error(f"Failed to load whisper: {e}")
-        print(f"ERROR: Failed to load Whisper module: {e}")
+        logger.error(f"Failed to load faster-whisper: {e}")
+        print(f"ERROR: Failed to load faster-whisper module: {e}")
         print("Trying to fall back to SpeechRecognition library...")
         return load_speech_recognition()
 
@@ -114,7 +114,7 @@ class SimpleSpeechProcessorUI:
         self.should_update = True
         self.stream = None
         
-        # Initialize PyAudio
+        # Initialize PyAudio with explicit device selection
         print("Initializing audio system...")
         logger.info("Initializing PyAudio system")
         try:
@@ -122,27 +122,47 @@ class SimpleSpeechProcessorUI:
             
             # Log audio device information
             logger.info(f"PyAudio version: {pyaudio.get_portaudio_version()}")
-            logger.info(f"Default input device index: {self.p.get_default_input_device_info()['index']}")
             
-            # Log all available audio devices
+            # Get all available audio devices
             info = self.p.get_host_api_info_by_index(0)
             numdevices = info.get('deviceCount')
-            logger.debug(f"Found {numdevices} audio devices:")
+            logger.info(f"Found {numdevices} audio devices:")
+            
+            # Find the best input device
+            selected_device = None
+            selected_device_index = None
             
             for i in range(numdevices):
-                device_info = self.p.get_device_info_by_host_api_device_index(0, i)
-                device_name = device_info.get('name')
-                max_input_channels = device_info.get('maxInputChannels')
-                max_output_channels = device_info.get('maxOutputChannels')
-                
-                logger.debug(f"Device {i}: {device_name}")
-                logger.debug(f"  Max Input Channels: {max_input_channels}")
-                logger.debug(f"  Max Output Channels: {max_output_channels}")
-                logger.debug(f"  Default Sample Rate: {device_info.get('defaultSampleRate')}")
-                
-                # Print info about input devices
-                if max_input_channels > 0:
-                    print(f"Found input device: {device_name}")
+                try:
+                    device_info = self.p.get_device_info_by_host_api_device_index(0, i)
+                    device_name = device_info.get('name')
+                    max_input_channels = device_info.get('maxInputChannels')
+                    
+                    logger.info(f"Device {i}: {device_name}")
+                    logger.info(f"  Max Input Channels: {max_input_channels}")
+                    logger.info(f"  Default Sample Rate: {device_info.get('defaultSampleRate')}")
+                    
+                    # Only consider input devices
+                    if max_input_channels > 0:
+                        print(f"Found input device: {device_name}")
+                        
+                        # Prefer non-default devices as they're often external mics
+                        if not selected_device or 'default' not in device_name.lower():
+                            selected_device = device_info
+                            selected_device_index = i
+                            
+                except Exception as e:
+                    logger.warning(f"Error checking device {i}: {e}")
+            
+            if not selected_device:
+                raise Exception("No suitable input device found")
+            
+            logger.info(f"Selected input device: {selected_device['name']} (index {selected_device_index})")
+            print(f"Using input device: {selected_device['name']}")
+            
+            # Store the selected device info for later use
+            self.selected_device_index = selected_device_index
+            self.selected_device_info = selected_device
             
         except Exception as e:
             logger.error(f"Error initializing PyAudio: {e}", exc_info=True)
@@ -191,22 +211,26 @@ class SimpleSpeechProcessorUI:
             ))
             return
         
-        # Load the whisper model
+        # Load the faster-whisper model
         try:
             self.root.after(0, lambda: self.status_label.config(
-                text="Loading Whisper model..."
+                text="Loading faster-whisper model..."
             ))
             
+            # Import here to avoid circular imports
+            import faster_whisper
+            
             # Load the small model for a good balance of speed and accuracy
-            self.whisper_model = whisper.load_model("base")
+            # Using CPU as default for compatibility
+            self.whisper_model = faster_whisper.WhisperModel("base", device="cpu", compute_type="int8")
             
             self.root.after(0, lambda: self.status_label.config(
                 text="Ready"
             ))
             
-            logger.info("Whisper model loaded successfully")
+            logger.info("faster-whisper model loaded successfully")
         except Exception as e:
-            logger.error(f"Error loading Whisper model: {e}")
+            logger.error(f"Error loading faster-whisper model: {e}")
             self.root.after(0, lambda: self.status_label.config(
                 text=f"Error loading model: {e}"
             ))
@@ -269,54 +293,97 @@ class SimpleSpeechProcessorUI:
             logger.info("Starting audio recording")
             
             def audio_callback(in_data, frame_count, time_info, status):
-                # Log any audio stream status issues
-                if status:
-                    status_flags = []
-                    if status & pyaudio.paInputUnderflow:
-                        status_flags.append("Input Underflow")
-                    if status & pyaudio.paInputOverflow:
-                        status_flags.append("Input Overflow")
-                    if status & pyaudio.paOutputUnderflow:
-                        status_flags.append("Output Underflow")
-                    if status & pyaudio.paOutputOverflow:
-                        status_flags.append("Output Overflow")
-                    if status & pyaudio.paPrimingOutput:
-                        status_flags.append("Priming Output")
+                try:
+                    # Log detailed timing information periodically
+                    if hasattr(self, 'callback_count'):
+                        self.callback_count += 1
+                        if self.callback_count % 50 == 0:  # Log every ~50 callbacks
+                            logger.debug(f"Audio callback timing - input timestamp: {time_info.get('input_buffer_adc_time', 'N/A')}, "
+                                       f"current time: {time_info.get('current_time', 'N/A')}")
+                    else:
+                        self.callback_count = 1
+
+                    # Check for audio status flags
+                    if status:
+                        status_flags = []
+                        if status & pyaudio.paInputUnderflow:
+                            status_flags.append("Input Underflow")
+                        if status & pyaudio.paInputOverflow:
+                            status_flags.append("Input Overflow")
+                        if status & pyaudio.paOutputUnderflow:
+                            status_flags.append("Output Underflow")
+                        if status & pyaudio.paOutputOverflow:
+                            status_flags.append("Output Overflow")
+                        if status & pyaudio.paPrimingOutput:
+                            status_flags.append("Priming Output")
+                        
+                        if status_flags:
+                            logger.warning(f"Audio callback status flags: {', '.join(status_flags)}")
                     
-                    if status_flags:
-                        logger.warning(f"Audio callback status flags: {', '.join(status_flags)}")
-                
-                # Store audio data for processing
-                if hasattr(self, 'audio_frames'):
-                    self.audio_frames.append(in_data)
+                    # Store audio data for processing
+                    if hasattr(self, 'audio_frames'):
+                        self.audio_frames.append(in_data)
+                        
+                        # Periodically log audio levels for debugging
+                        if len(self.audio_frames) % 20 == 0:  # Log every ~1 second (20 chunks at 1024 samples)
+                            try:
+                                audio_data = np.frombuffer(in_data, dtype=np.int16)
+                                normalized = audio_data.astype(float) / 32768.0
+                                amplitude = np.abs(normalized).mean()
+                                logger.debug(f"Current audio amplitude: {amplitude:.6f}")
+                            except Exception as e:
+                                logger.error(f"Error calculating audio level: {e}")
                     
-                    # Periodically log audio levels for debugging
-                    if len(self.audio_frames) % 20 == 0:  # Log every ~1 second (20 chunks at 1024 samples)
-                        try:
-                            audio_data = np.frombuffer(in_data, dtype=np.int16)
-                            normalized = audio_data.astype(float) / 32768.0
-                            amplitude = np.abs(normalized).mean()
-                            logger.debug(f"Current audio amplitude: {amplitude:.6f}")
-                        except Exception as e:
-                            logger.error(f"Error calculating audio level: {e}")
-                
-                return (in_data, pyaudio.paContinue)
+                    return (in_data, pyaudio.paContinue)
+                    
+                except Exception as e:
+                    logger.error(f"Error in audio callback: {e}", exc_info=True)
+                    return (in_data, pyaudio.paContinue)  # Try to continue despite errors
             
             # Initialize audio frames list
             self.audio_frames = []
             
-            # Start the audio stream
-            logger.debug(f"Opening audio stream with FORMAT={FORMAT}, CHANNELS={CHANNELS}, RATE={RATE}, CHUNK={CHUNK}")
+            # Start the audio stream with the selected device
+            logger.debug(f"Opening audio stream with FORMAT={FORMAT}, CHANNELS={CHANNELS}, RATE={RATE}, CHUNK={CHUNK}, DEVICE={self.selected_device_index}")
             self.stream = self.p.open(
                 format=FORMAT,
                 channels=CHANNELS,
                 rate=RATE,
                 input=True,
+                input_device_index=self.selected_device_index,
                 frames_per_buffer=CHUNK,
                 stream_callback=audio_callback
             )
             
-            logger.info(f"Audio stream started successfully, stream active: {self.stream.is_active()}")
+            # Verify stream is active and receiving audio
+            if not self.stream.is_active():
+                logger.error("Stream created but not active")
+                raise Exception("Audio stream is not active")
+            
+            # Test audio input
+            logger.info("Testing audio input...")
+            print("Testing audio input...")
+            
+            # Wait a moment and check if we're receiving audio
+            time.sleep(0.5)
+            if not hasattr(self, 'audio_frames') or len(self.audio_frames) == 0:
+                logger.error("No audio data received in initial test")
+                raise Exception("No audio data being received")
+            
+            # Check audio levels
+            test_frame = self.audio_frames[-1]
+            audio_data = np.frombuffer(test_frame, dtype=np.int16)
+            normalized = audio_data.astype(float) / 32768.0
+            level = np.abs(normalized).mean()
+            
+            logger.info(f"Initial audio level: {level:.6f}")
+            print(f"Audio input level: {level:.6f}")
+            
+            if level < 0.0001:  # Very low level threshold
+                logger.warning("Very low audio input level detected")
+                print("Warning: Very low audio input level detected")
+            
+            logger.info("Audio stream initialized and receiving data")
             print("Microphone activated. Listening for speech...")
             
             # Start a thread to detect silence and stop recording
@@ -336,10 +403,11 @@ class SimpleSpeechProcessorUI:
             logger.info("Starting silence detection")
             time.sleep(0.5)
             
-            silence_threshold = 0.005  # Reduced from 0.01 to be less sensitive
+            # Adjusted silence detection parameters based on debug tool findings
+            silence_threshold = 0.01  # Increased based on debug tool mean amplitude of ~0.026
             silence_duration = 0
-            max_silence = 2.0  # Increased from 1.5 to 2.0 seconds
-            check_interval = 0.1
+            max_silence = 3.0  # Increased to give more time for natural pauses
+            check_interval = 0.2  # Increased to reduce CPU usage and allow for smoother detection
             
             logger.debug(f"Silence detection parameters: threshold={silence_threshold}, max_silence={max_silence}s, check_interval={check_interval}s")
             
@@ -355,21 +423,22 @@ class SimpleSpeechProcessorUI:
                 latest_frame = self.audio_frames[-1]
                 audio_data = np.frombuffer(latest_frame, dtype=np.int16)
                 normalized = audio_data.astype(float) / 32768.0
-                amplitude = np.abs(normalized).mean()
+                current_amplitude = np.abs(normalized).mean()
                 
-                # Add to history (keep last 10 values)
-                amplitude_history.append(amplitude)
-                if len(amplitude_history) > 10:
-                    amplitude_history.pop(0)
+                # Use a moving average of recent amplitudes for more stable detection
+                if hasattr(self, 'recent_amplitudes') and len(self.recent_amplitudes) > 0:
+                    avg_amplitude = sum(self.recent_amplitudes) / len(self.recent_amplitudes)
+                else:
+                    avg_amplitude = current_amplitude
                 
-                if amplitude < silence_threshold:
+                if avg_amplitude < silence_threshold:
                     silence_duration += check_interval
                     # Log only when silence is detected
-                    if silence_duration >= 0.5 and silence_duration % 0.5 < check_interval:
-                        logger.debug(f"Silence detected for {silence_duration:.1f}s, amplitude: {amplitude:.6f}")
+                    if silence_duration >= 1.0 and silence_duration % 1.0 < check_interval:
+                        logger.debug(f"Silence detected for {silence_duration:.1f}s, avg amplitude: {avg_amplitude:.6f}")
                 else:
                     if silence_duration > 0:
-                        logger.debug(f"Speech resumed after {silence_duration:.1f}s of silence, amplitude: {amplitude:.6f}")
+                        logger.debug(f"Speech resumed after {silence_duration:.1f}s of silence, amplitude: {avg_amplitude:.6f}")
                     silence_duration = 0
                 
                 time.sleep(check_interval)
@@ -392,7 +461,7 @@ class SimpleSpeechProcessorUI:
             logger.error(f"Error in silence detection: {e}", exc_info=True)
     
     def process_recording(self):
-        """Process the recorded audio and generate a transcription using Whisper"""
+        """Process the recorded audio and generate a transcription using faster-whisper"""
         try:
             if not hasattr(self, 'audio_frames') or not self.audio_frames:
                 logger.warning("No audio frames to process")
@@ -408,7 +477,7 @@ class SimpleSpeechProcessorUI:
                 logger.warning(f"Audio recording too short ({total_audio_time:.2f}s), may not contain speech")
             
             if not hasattr(self, 'whisper_model') or self.whisper_model is None:
-                logger.warning("Whisper model not loaded yet")
+                logger.warning("faster-whisper model not loaded yet")
                 self.last_transcript = "Sorry, speech recognition model is still loading. Please try again in a moment."
                 with open(TRANSCRIPTION_FILE, 'w') as f:
                     f.write(self.last_transcript)
@@ -433,25 +502,30 @@ class SimpleSpeechProcessorUI:
             
             logger.info(f"Audio saved to temporary file: {temp_audio_path}")
             
-            # Use Whisper to transcribe the audio
-            logger.info("Transcribing audio with Whisper...")
-            print("Transcribing audio with Whisper...")
+            # Use faster-whisper to transcribe the audio
+            logger.info("Transcribing audio with faster-whisper...")
+            print("Transcribing audio with faster-whisper...")
             self.root.after(0, lambda: self.status_label.config(text="Transcribing audio..."))
             
             transcription_start = time.time()
-            result = self.whisper_model.transcribe(temp_audio_path)
+            segments, info = self.whisper_model.transcribe(temp_audio_path, beam_size=5)
+            
+            # Collect all segments to form the complete transcription
+            transcription = ""
+            for segment in segments:
+                transcription += segment.text + " "
+            
+            transcription = transcription.strip()
             transcription_time = time.time() - transcription_start
             
-            transcription = result["text"].strip()
-            
             logger.info(f"Transcription completed in {transcription_time:.2f}s: {transcription}")
+            logger.debug(f"Transcription info: {info}")
             print(f"Transcription complete: \"{transcription}\"")
             
-            # Log segments if available
-            if "segments" in result:
-                logger.debug(f"Transcription segments: {len(result['segments'])}")
-                for i, segment in enumerate(result["segments"]):
-                    logger.debug(f"Segment {i}: {segment.get('start', '?')}-{segment.get('end', '?')}s: {segment.get('text', '')}")
+            # Log segments for debugging
+            logger.debug("Transcription segments:")
+            for i, segment in enumerate(segments):
+                logger.debug(f"Segment {i}: {segment.start}-{segment.end}s: {segment.text}")
             
             # Clean up the temporary file
             try:

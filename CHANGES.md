@@ -1,6 +1,27 @@
 # Speech MCP Changes
 
-## Fixes for Current Issues
+## Latest Changes
+
+### 6. Freezing and State Management Issues
+- Fixed issue where `start_conversation()` would freeze indefinitely
+- Added file system permission testing to verify transcription file can be created
+- Added fallback transcription mechanism when UI process fails to create transcription file
+- Reduced timeout from 10 minutes to 30 seconds for better responsiveness
+- Added emergency transcription when timeout occurs
+- Added more detailed debug output to console
+- Added psutil dependency for better process management
+- Enhanced state management to avoid getting stuck in listening state
+- Added force reset of speech state at the beginning of `start_conversation()`
+- Modified error handling to return error messages instead of raising exceptions
+- Updated documentation with troubleshooting information
+
+### 5. Migrated to faster-whisper
+- Replaced openai-whisper with faster-whisper for improved performance
+- Updated transcription processing to work with faster-whisper's API
+- Updated documentation to reflect the new dependency
+- Configured faster-whisper to use CPU with int8 quantization for better compatibility
+
+## Previous Fixes
 
 ### 1. Listen Function Timeout Issue
 - Increased the timeout from 60 seconds to 10 minutes
@@ -60,6 +81,7 @@ If you encounter issues:
 1. Check the log files:
    - `/Users/mnovich/Development/speech-mcp/src/speech_mcp/speech-mcp.log`
    - `/Users/mnovich/Development/speech-mcp/src/speech_mcp/speech-mcp-server.log`
+   - `/Users/mnovich/Development/speech-mcp/src/speech_mcp/speech-mcp-ui.log`
 
 2. Make sure the UI process is running:
    ```
@@ -67,3 +89,13 @@ If you encounter issues:
    ```
 
 3. If the UI is not running, check for error messages in the logs and try restarting the server.
+
+4. If the extension seems stuck, try deleting or resetting the state file:
+   ```
+   echo '{"ui_active": false, "listening": false, "speaking": false, "last_transcript": "", "last_response": ""}' > src/speech_mcp/speech_state.json
+   ```
+
+5. Use the direct command instead of `uv run speech-mcp`:
+   ```
+   goose session --with-extension "speech-mcp"
+   ```
