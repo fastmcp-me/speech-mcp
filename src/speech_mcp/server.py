@@ -5,7 +5,8 @@ import json
 import logging
 import time
 import threading
-from typing import Dict, Optional
+import asyncio
+from typing import Dict, Optional, Callable
 
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
@@ -162,10 +163,11 @@ def listen_for_speech() -> str:
         if os.path.exists(TRANSCRIPTION_FILE):
             os.remove(TRANSCRIPTION_FILE)
         
-        timeout = 600  # 10 minutes timeout (increased from 120 seconds)
+        max_timeout = 600  # 10 minutes maximum timeout
         start_time = time.time()
         
-        while not os.path.exists(TRANSCRIPTION_FILE) and time.time() - start_time < timeout:
+        # Wait for transcription file to appear
+        while not os.path.exists(TRANSCRIPTION_FILE) and time.time() - start_time < max_timeout:
             time.sleep(0.5)
             # Print a message every 30 seconds to indicate we're still waiting
             if (time.time() - start_time) % 30 < 0.5:
@@ -267,6 +269,79 @@ def speak_text(text: str) -> str:
             )
         )
 
+# Background task for listening
+async def listen_task(callback: Callable[[str], None]):
+    """Background task for listening to speech"""
+    try:
+        # Ensure the UI is running
+        if not ensure_ui_running():
+            callback(f"Error: Failed to start the speech recognition system.")
+            return
+        
+        # Set listening state
+        speech_state["listening"] = True
+        save_speech_state(speech_state)
+        
+        logger.info("Starting to listen for speech input in background task...")
+        print("\nListening for speech input... Speak now.")
+        
+        # Delete any existing transcription file to avoid using old data
+        if os.path.exists(TRANSCRIPTION_FILE):
+            os.remove(TRANSCRIPTION_FILE)
+        
+        # Start a separate thread to monitor for the transcription file
+        def monitor_transcription():
+            try:
+                start_time = time.time()
+                max_wait_time = 600  # 10 minutes
+                
+                while not os.path.exists(TRANSCRIPTION_FILE) and time.time() - start_time < max_wait_time:
+                    time.sleep(0.5)
+                    # Print a message every 30 seconds to indicate we're still waiting
+                    if (time.time() - start_time) % 30 < 0.5:
+                        print(f"Still waiting for speech input... ({int(time.time() - start_time)} seconds elapsed)")
+                
+                if not os.path.exists(TRANSCRIPTION_FILE):
+                    speech_state["listening"] = False
+                    save_speech_state(speech_state)
+                    callback("Error: Timeout waiting for speech transcription.")
+                    return
+                
+                # Read the transcription
+                with open(TRANSCRIPTION_FILE, 'r') as f:
+                    transcription = f.read().strip()
+                
+                logger.info(f"Received transcription: {transcription}")
+                print(f"Transcription received: \"{transcription}\"")
+                
+                # Delete the file to prepare for the next transcription
+                os.remove(TRANSCRIPTION_FILE)
+                
+                # Update state
+                speech_state["listening"] = False
+                speech_state["last_transcript"] = transcription
+                save_speech_state(speech_state)
+                
+                # Call the callback with the transcription
+                callback(transcription)
+            except Exception as e:
+                # Update state on error
+                speech_state["listening"] = False
+                save_speech_state(speech_state)
+                
+                logger.error(f"Error during speech recognition: {e}")
+                callback(f"Error: {str(e)}")
+        
+        # Start the monitoring thread
+        threading.Thread(target=monitor_transcription, daemon=True).start()
+        
+    except Exception as e:
+        logger.error(f"Error in listen_task: {e}")
+        callback(f"Error: {str(e)}")
+
+# Active background tasks
+background_tasks = {}
+
 @mcp.tool()
 def start_conversation() -> str:
     """
@@ -294,7 +369,7 @@ def start_conversation() -> str:
     # Give the UI a moment to fully initialize
     time.sleep(2)
     
-    # Start listening
+    # Start listening - using direct approach for this initial call
     try:
         transcription = listen_for_speech()
         return transcription
@@ -346,7 +421,7 @@ def reply(text: str) -> str:
             )
         )
     
-    # Start listening for response
+    # Start listening for response - using direct approach
     try:
         transcription = listen_for_speech()
         return transcription
