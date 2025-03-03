@@ -143,50 +143,9 @@ def ensure_ui_running():
         print(f"Failed to start UI: {e}")
         return False
 
-@mcp.tool()
-def start_voice_mode() -> str:
-    """
-    Start the voice mode for speech recognition.
-    
-    This will initialize the speech recognition system.
-    """
+def listen_for_speech() -> str:
+    """Internal function to listen for speech and return transcription"""
     global speech_state
-    
-    # Reload speech state to ensure we have the latest
-    speech_state = load_speech_state()
-    
-    if ensure_ui_running():
-        return "Voice mode activated. The speech recognition system is initializing. Note that Whisper model loading may take a moment on first use. Please wait for the 'Whisper model loaded successfully!' message in the terminal before proceeding."
-    else:
-        raise McpError(
-            ErrorData(
-                INTERNAL_ERROR,
-                "Failed to start the speech recognition system."
-            )
-        )
-
-@mcp.tool()
-def listen() -> str:
-    """
-    Start listening for user speech and return the transcription.
-    
-    This will activate the microphone and listen until the user stops speaking.
-    Returns:
-        A string containing the transcription of the user's speech.
-    """
-    global speech_state
-    
-    # Reload speech state to ensure we have the latest
-    speech_state = load_speech_state()
-    
-    # Ensure the UI is running
-    if not ensure_ui_running():
-        raise McpError(
-            ErrorData(
-                INTERNAL_ERROR,
-                "Failed to start the speech recognition system for listening."
-            )
-        )
     
     # Set listening state
     speech_state["listening"] = True
@@ -203,13 +162,13 @@ def listen() -> str:
         if os.path.exists(TRANSCRIPTION_FILE):
             os.remove(TRANSCRIPTION_FILE)
         
-        timeout = 120  # 120 seconds timeout (increased from 60)
+        timeout = 600  # 10 minutes timeout (increased from 120 seconds)
         start_time = time.time()
         
         while not os.path.exists(TRANSCRIPTION_FILE) and time.time() - start_time < timeout:
             time.sleep(0.5)
-            # Print a message every 10 seconds to indicate we're still waiting
-            if (time.time() - start_time) % 10 < 0.5:
+            # Print a message every 30 seconds to indicate we're still waiting
+            if (time.time() - start_time) % 30 < 0.5:
                 print(f"Still waiting for speech input... ({int(time.time() - start_time)} seconds elapsed)")
         
         if not os.path.exists(TRANSCRIPTION_FILE):
@@ -251,30 +210,9 @@ def listen() -> str:
             )
         )
 
-@mcp.tool()
-def speak(text: str) -> str:
-    """
-    Convert text to speech.
-    
-    Args:
-        text: The text to be spoken
-        
-    Returns:
-        A confirmation message
-    """
+def speak_text(text: str) -> str:
+    """Internal function to speak text"""
     global speech_state
-    
-    # Reload speech state to ensure we have the latest
-    speech_state = load_speech_state()
-    
-    # Ensure the UI is running
-    if not ensure_ui_running():
-        raise McpError(
-            ErrorData(
-                INTERNAL_ERROR,
-                "Failed to start the speech recognition system for speaking."
-            )
-        )
     
     if not text:
         raise McpError(
@@ -330,27 +268,96 @@ def speak(text: str) -> str:
         )
 
 @mcp.tool()
-def get_speech_state() -> str:
+def start_conversation() -> str:
     """
-    Get the current state of the speech system.
+    Start a voice conversation by launching the UI and beginning to listen.
+    
+    This will initialize the speech recognition system and immediately start listening for user input.
     
     Returns:
-        A string representation of the current speech state
+        The transcription of the user's speech.
     """
     global speech_state
     
     # Reload speech state to ensure we have the latest
     speech_state = load_speech_state()
     
-    state_str = f"""
-Speech UI Active: {speech_state["ui_active"]}
-Currently Listening: {speech_state["listening"]}
-Currently Speaking: {speech_state["speaking"]}
-Last Transcript: "{speech_state["last_transcript"]}"
-Last Response: "{speech_state["last_response"]}"
-"""
+    # Start the UI
+    if not ensure_ui_running():
+        raise McpError(
+            ErrorData(
+                INTERNAL_ERROR,
+                "Failed to start the speech recognition system."
+            )
+        )
     
-    return state_str
+    # Give the UI a moment to fully initialize
+    time.sleep(2)
+    
+    # Start listening
+    try:
+        transcription = listen_for_speech()
+        return transcription
+    except Exception as e:
+        logger.error(f"Error starting conversation: {e}")
+        raise McpError(
+            ErrorData(
+                INTERNAL_ERROR,
+                f"Error starting conversation: {str(e)}"
+            )
+        )
+
+@mcp.tool()
+def reply(text: str) -> str:
+    """
+    Speak the provided text and then listen for a response.
+    
+    This will speak the given text and then immediately start listening for user input.
+    
+    Args:
+        text: The text to speak to the user
+        
+    Returns:
+        The transcription of the user's response.
+    """
+    global speech_state
+    
+    # Reload speech state to ensure we have the latest
+    speech_state = load_speech_state()
+    
+    # Ensure the UI is running
+    if not ensure_ui_running():
+        raise McpError(
+            ErrorData(
+                INTERNAL_ERROR,
+                "Failed to start the speech recognition system."
+            )
+        )
+    
+    # Speak the text
+    try:
+        speak_text(text)
+    except Exception as e:
+        logger.error(f"Error speaking text: {e}")
+        raise McpError(
+            ErrorData(
+                INTERNAL_ERROR,
+                f"Error speaking text: {str(e)}"
+            )
+        )
+    
+    # Start listening for response
+    try:
+        transcription = listen_for_speech()
+        return transcription
+    except Exception as e:
+        logger.error(f"Error listening for response: {e}")
+        raise McpError(
+            ErrorData(
+                INTERNAL_ERROR,
+                f"Error listening for response: {str(e)}"
+            )
+        )
 
 @mcp.resource(uri="mcp://speech/usage_guide")
 def usage_guide() -> str:
@@ -360,65 +367,49 @@ def usage_guide() -> str:
     return """
     # Speech MCP Usage Guide
     
-    This MCP extension provides voice interaction capabilities.
+    This MCP extension provides voice interaction capabilities with a simplified interface.
     
     ## How to Use
     
-    1. Start the voice mode:
+    1. Start a conversation:
        ```
-       start_voice_mode()
+       user_input = start_conversation()
        ```
-       This initializes the speech recognition system.
+       This initializes the speech recognition system, launches the UI, and immediately starts listening for user input.
        Note: The first time you run this, it will download the Whisper model which may take a moment.
     
-    2. Listen for user speech:
+    2. Reply to the user and get their response:
        ```
-       transcript = listen()
+       user_response = reply("Your response text here")
        ```
-       This activates the microphone and listens until the user stops speaking.
-       The function returns the transcription of the speech using OpenAI's Whisper model.
-    
-    3. Respond with speech:
-       ```
-       speak("Your response text here")
-       ```
-       This converts the text to speech.
-    
-    4. Check the current state:
-       ```
-       get_speech_state()
-       ```
-       This returns information about the current state of the speech system.
+       This speaks your response and then listens for the user's reply.
     
     ## Typical Workflow
     
-    1. Start the voice mode
-    2. Listen for user input
-    3. Process the transcribed speech
-    4. Respond with speech
-    5. Listen again for the next user input
+    1. Start the conversation to get the initial user input
+    2. Process the transcribed speech
+    3. Use the reply function to respond and get the next user input
+    4. Repeat steps 2-3 for a continuous conversation
     
     ## Example Conversation Flow
     
     ```python
-    # Start the voice mode
-    start_voice_mode()
-    
-    # Listen for the user's question
-    user_input = listen()
+    # Start the conversation
+    user_input = start_conversation()
     
     # Process the input and generate a response
     # ...
     
-    # Speak the response
-    speak("Here's my response to your question.")
+    # Reply to the user and get their response
+    follow_up = reply("Here's my response to your question.")
     
-    # Listen for follow-up
-    next_input = listen()
+    # Process the follow-up and reply again
+    reply("I understand your follow-up question. Here's my answer.")
     ```
     
     ## Tips
     
     - For best results, use a quiet environment and speak clearly
     - The system automatically detects silence to know when you've finished speaking
+    - The listening timeout is set to 10 minutes to allow for natural pauses in conversation
     """

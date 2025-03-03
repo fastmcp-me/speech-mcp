@@ -3,7 +3,7 @@
 ## Fixes for Current Issues
 
 ### 1. Listen Function Timeout Issue
-- Increased the timeout from 60 to 120 seconds
+- Increased the timeout from 60 seconds to 10 minutes
 - Added progress messages during listening to show that the system is still waiting
 - Reduced silence detection threshold from 0.01 to 0.005 to make it less sensitive
 - Increased maximum silence duration from 1.5 to 2.0 seconds before ending recording
@@ -23,6 +23,13 @@
 - **Fixed log output:** Improved log output formatting to clean up error messages
 - **Added minimal UI:** Implemented a simple status window that shows when the system is listening or speaking
 
+### 4. Simplified API
+- Reduced the API to just two main functions:
+  - `start_conversation()`: Launches the UI and immediately starts listening
+  - `reply(text)`: Speaks the provided text and then listens for a response
+- Removed separate `start_voice_mode()`, `listen()`, and `speak()` functions
+- Simplified the workflow for voice conversations
+
 ## How to Test
 
 1. Make sure all dependencies are installed:
@@ -36,15 +43,14 @@
    speech-mcp
    ```
 
-3. Test the listen function:
+3. Start a conversation:
    ```
-   start_voice_mode()
-   listen()
+   user_input = start_conversation()
    ```
 
-4. Test the speak function:
+4. Reply to the user and get their response:
    ```
-   speak("This is a test of the speech synthesis system")
+   user_response = reply("This is a test of the speech synthesis system")
    ```
 
 ## Troubleshooting
