@@ -1,0 +1,194 @@
+{
+  "project": {
+    "name": "speech-mcp",
+    "description": "Speech MCP extension for Goose that provides voice interaction with audio visualization",
+    "version": "0.1.0",
+    "type": "goose_extension",
+    "python_min_version": "3.10"
+  },
+  "architecture": {
+    "main_components": [
+      {
+        "name": "server",
+        "path": "src/speech_mcp/server.py",
+        "description": "Main MCP server implementation with FastMCP integration",
+        "responsibilities": ["Manage speech state", "Provide MCP tools", "Control UI process"]
+      },
+      {
+        "name": "ui",
+        "path": "src/speech_mcp/ui/__init__.py",
+        "description": "Speech UI implementation with audio processing and visualization",
+        "responsibilities": ["Audio recording", "Speech recognition", "Text-to-speech", "UI display"]
+      }
+    ],
+    "entry_points": [
+      {
+        "name": "main.py",
+        "description": "Project entry point that imports and calls the main function"
+      },
+      {
+        "name": "__init__.py",
+        "description": "Package initialization with main function definition"
+      },
+      {
+        "name": "__main__.py",
+        "description": "Module entry point for direct execution"
+      },
+      {
+        "name": "ui/__main__.py",
+        "description": "UI module entry point for direct execution"
+      }
+    ]
+  },
+  "api": {
+    "mcp_tools": [
+      {
+        "name": "start_conversation",
+        "description": "Start a voice conversation by launching the UI and beginning to listen",
+        "returns": "Transcription of user's speech",
+        "parameters": []
+      },
+      {
+        "name": "reply",
+        "description": "Speak the provided text and then listen for a response",
+        "parameters": [
+          {
+            "name": "text",
+            "type": "string",
+            "description": "The text to speak to the user"
+          }
+        ],
+        "returns": "Transcription of user's response"
+      }
+    ],
+    "resources": [
+      {
+        "uri": "mcp://speech/usage_guide",
+        "description": "Usage guide for the Speech MCP extension"
+      }
+    ]
+  },
+  "dependencies": {
+    "external": [
+      "mcp[cli]>=1.2.0",
+      "SpeechRecognition>=3.10.0",
+      "numpy>=1.24.0",
+      "pyaudio>=0.2.13",
+      "pydub>=0.25.1",
+      "openai-whisper>=20231117",
+      "numba>=0.57.0",
+      "pyttsx3>=2.90"
+    ],
+    "key_components": {
+      "speech_recognition": {
+        "primary": "openai-whisper",
+        "fallback": "SpeechRecognition"
+      },
+      "audio_processing": ["pyaudio", "numpy", "pydub"],
+      "text_to_speech": "pyttsx3"
+    }
+  },
+  "files": {
+    "state": [
+      {
+        "path": "src/speech_mcp/speech_state.json",
+        "description": "Stores the current state of the speech system",
+        "fields": ["ui_active", "ui_process", "listening", "speaking", "last_transcript", "last_response"]
+      },
+      {
+        "path": "src/speech_mcp/transcription.txt",
+        "description": "Temporary file used to pass transcription from UI to server"
+      },
+      {
+        "path": "src/speech_mcp/response.txt",
+        "description": "Temporary file used to pass response text from server to UI for speaking"
+      }
+    ],
+    "logs": [
+      {
+        "path": "src/speech_mcp/speech-mcp.log",
+        "description": "Main log file for the speech MCP"
+      },
+      {
+        "path": "src/speech_mcp/speech-mcp-server.log",
+        "description": "Log file for the server component"
+      },
+      {
+        "path": "src/speech_mcp/speech-mcp-ui.log",
+        "description": "Log file for the UI component"
+      }
+    ]
+  },
+  "workflows": {
+    "conversation": [
+      {
+        "step": 1,
+        "description": "Call start_conversation() to initialize UI and begin listening",
+        "code": "user_input = start_conversation()"
+      },
+      {
+        "step": 2,
+        "description": "Process user input and generate response"
+      },
+      {
+        "step": 3,
+        "description": "Call reply() with response text to speak and listen for next input",
+        "code": "user_response = reply(\"Your response text here\")"
+      },
+      {
+        "step": 4,
+        "description": "Repeat steps 2-3 for continuous conversation"
+      }
+    ]
+  },
+  "recent_fixes": {
+    "listen_timeout": "Increased timeout from 60s to 10min, reduced silence threshold",
+    "speech_synthesis": "Added pyttsx3 for text-to-speech with fallback to simulation",
+    "ui_startup": "Enhanced error handling, improved process management, fixed path issues",
+    "api_simplification": "Reduced API to just start_conversation() and reply() functions"
+  },
+  "installation": {
+    "methods": [
+      {
+        "name": "goose_deeplink",
+        "url": "goose://extension?cmd=uvx&arg=speech-mcp&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose"
+      },
+      {
+        "name": "goose_cli",
+        "command": "goose session --with-extension \"uvx speech-mcp\""
+      },
+      {
+        "name": "goose_configure",
+        "steps": ["Run goose configure", "Add Extension", "Command-line Extension", "Name: Speech Interface", "Command: uvx speech-mcp"]
+      },
+      {
+        "name": "manual",
+        "steps": ["Clone repository", "pip install -e ."]
+      }
+    ]
+  },
+  "troubleshooting": {
+    "log_locations": [
+      "src/speech_mcp/speech-mcp.log",
+      "src/speech_mcp/speech-mcp-server.log",
+      "src/speech_mcp/speech-mcp-ui.log"
+    ],
+    "common_issues": [
+      {
+        "issue": "UI not starting",
+        "check": "ps aux | grep speech_mcp",
+        "solution": "Check logs for errors, ensure dependencies are installed"
+      },
+      {
+        "issue": "Audio not working",
+        "check": "Check audio device settings and permissions",
+        "solution": "Verify PyAudio is correctly installed with audio device access"
+      },
+      {
+        "issue": "Speech recognition failing",
+        "check": "Check if Whisper model is downloaded",
+        "solution": "First run may take time to download the model"
+      }
+    ]
+  }
+}
