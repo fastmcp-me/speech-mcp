@@ -1,3 +1,4 @@
+import tkinter as tk
 import os
 import json
 import time
@@ -77,9 +78,13 @@ def load_speech_recognition():
         print("Please install it with: pip install SpeechRecognition")
         return False
 
-class SimpleSpeechProcessor:
-    """A simple speech processor without GUI"""
-    def __init__(self):
+class SpeechProcessorUI:
+    """A speech processor with a simple GUI"""
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Speech MCP")
+        self.root.geometry("400x300")
+        
         # Initialize basic components
         print("Initializing speech processor...")
         self.ui_active = True
@@ -97,16 +102,15 @@ class SimpleSpeechProcessor:
         # Load speech state
         self.load_speech_state()
         
+        # Create the UI components
+        self.create_ui()
+        
         # Load whisper
         print("Checking for speech recognition module...")
-        if not load_whisper():
-            print("WARNING: Speech recognition will not be available.")
-            print("Please install the Whisper module with: pip install openai-whisper")
-            return
+        self.status_label.config(text="Loading speech recognition model...")
         
-        # Initialize Whisper model
-        self.whisper_model = None
-        self.load_whisper_model()
+        # Load whisper in a separate thread to avoid freezing the UI
+        threading.Thread(target=self.initialize_speech_recognition, daemon=True).start()
         
         # Start threads for monitoring state changes
         self.update_thread = threading.Thread(target=self.check_for_updates)
@@ -118,21 +122,85 @@ class SimpleSpeechProcessor:
         self.response_thread.daemon = True
         self.response_thread.start()
         
+        # Handle window close event
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
+        
         print("Speech processor initialization complete!")
         logger.info("Speech processor initialized successfully")
     
-    def load_whisper_model(self):
-        """Load the Whisper model in a background thread"""
+    def create_ui(self):
+        """Create the UI components"""
+        # Status label
+        self.status_label = tk.Label(
+            self.root, 
+            text="Initializing...", 
+            font=('Arial', 12)
+        )
+        self.status_label.pack(pady=10)
+        
+        # Transcript frame
+        transcript_frame = tk.LabelFrame(self.root, text="Last Transcript", padx=5, pady=5)
+        transcript_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.transcript_text = tk.Text(transcript_frame, height=4, wrap="word")
+        self.transcript_text.pack(fill="both", expand=True)
+        self.transcript_text.insert("1.0", "No transcript yet")
+        self.transcript_text.config(state="disabled")
+        
+        # Response frame
+        response_frame = tk.LabelFrame(self.root, text="Last Response", padx=5, pady=5)
+        response_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.response_text = tk.Text(response_frame, height=4, wrap="word")
+        self.response_text.pack(fill="both", expand=True)
+        self.response_text.insert("1.0", "No response yet")
+        self.response_text.config(state="disabled")
+        
+        # Button frame
+        button_frame = tk.Frame(self.root)
+        button_frame.pack(pady=10)
+        
+        self.listen_button = tk.Button(
+            button_frame,
+            text="Listen",
+            command=self.toggle_listening
+        )
+        self.listen_button.pack(side="left", padx=5)
+        
+        self.speak_button = tk.Button(
+            button_frame,
+            text="Test Speech",
+            command=self.test_speech
+        )
+        self.speak_button.pack(side="left", padx=5)
+    
+    def initialize_speech_recognition(self):
+        """Initialize speech recognition in a background thread"""
+        if not load_whisper():
+            self.root.after(0, lambda: self.status_label.config(
+                text="WARNING: Speech recognition not available"
+            ))
+            return
+        
+        # Load the whisper model
         try:
+            self.root.after(0, lambda: self.status_label.config(
+                text="Loading Whisper model... This may take a few moments."
+            ))
+            
             # Load the small model for a good balance of speed and accuracy
-            print("Loading Whisper model... This may take a few moments.")
-            print("(The model will be downloaded if this is the first time using it)")
             self.whisper_model = whisper.load_model("base")
+            
+            self.root.after(0, lambda: self.status_label.config(
+                text="Ready! Whisper model loaded successfully."
+            ))
+            
             logger.info("Whisper model loaded successfully")
-            print("Whisper model loaded successfully! Ready to transcribe speech.")
         except Exception as e:
             logger.error(f"Error loading Whisper model: {e}")
-            print(f"Error loading Whisper model: {e}")
+            self.root.after(0, lambda: self.status_label.config(
+                text=f"Error loading Whisper model: {e}"
+            ))
     
     def load_speech_state(self):
         """Load the speech state from the file shared with the server"""
@@ -177,16 +245,36 @@ class SimpleSpeechProcessor:
         except Exception as e:
             logger.error(f"Error saving speech state: {e}")
     
-    def update_state_from_file(self):
-        """Update the state based on the current file"""
-        # Reload the state from file
-        self.load_speech_state()
+    def update_ui_from_state(self):
+        """Update the UI to reflect the current speech state"""
+        # Update status label
+        if self.listening:
+            self.status_label.config(text="Listening...")
+            self.listen_button.config(text="Stop Listening")
+        elif self.speaking:
+            self.status_label.config(text="Speaking...")
+        else:
+            self.status_label.config(text="Ready")
+            self.listen_button.config(text="Listen")
         
-        # Start or stop audio processing based on state
-        if self.listening and not self.stream:
-            self.start_listening()
-        elif not self.listening and self.stream:
+        # Update transcript text
+        self.transcript_text.config(state="normal")
+        self.transcript_text.delete("1.0", "end")
+        self.transcript_text.insert("1.0", self.last_transcript if self.last_transcript else "No transcript yet")
+        self.transcript_text.config(state="disabled")
+        
+        # Update response text
+        self.response_text.config(state="normal")
+        self.response_text.delete("1.0", "end")
+        self.response_text.insert("1.0", self.last_response if self.last_response else "No response yet")
+        self.response_text.config(state="disabled")
+    
+    def toggle_listening(self):
+        """Toggle listening mode on/off"""
+        if self.listening:
             self.stop_listening()
+        else:
+            self.start_listening()
     
     def start_listening(self):
         """Start listening for audio input"""
@@ -211,17 +299,23 @@ class SimpleSpeechProcessor:
                 stream_callback=audio_callback
             )
             
+            # Update state
+            self.listening = True
+            self.save_speech_state()
+            self.update_ui_from_state()
+            
             print("Microphone activated. Listening for speech...")
             logger.info("Started listening for audio input")
             
             # Start a thread to detect silence and stop recording
-            threading.Thread(target=self.detect_silence).start()
+            threading.Thread(target=self.detect_silence, daemon=True).start()
             
         except Exception as e:
             logger.error(f"Error starting audio stream: {e}")
             print(f"Error starting audio: {e}")
             self.listening = False
             self.save_speech_state()
+            self.update_ui_from_state()
     
     def detect_silence(self):
         """Detect when the user stops speaking and end recording"""
@@ -255,11 +349,10 @@ class SimpleSpeechProcessor:
             # If we exited because of silence detection
             if self.listening and self.stream:
                 logger.info("Silence detected, stopping recording")
+                self.root.after(0, lambda: self.status_label.config(text="Processing speech..."))
                 print("Silence detected. Processing speech...")
                 self.process_recording()
                 self.stop_listening()
-                self.listening = False
-                self.save_speech_state()
         
         except Exception as e:
             logger.error(f"Error in silence detection: {e}")
@@ -271,11 +364,12 @@ class SimpleSpeechProcessor:
                 logger.warning("No audio frames to process")
                 return
             
-            if self.whisper_model is None:
+            if not hasattr(self, 'whisper_model') or self.whisper_model is None:
                 logger.warning("Whisper model not loaded yet")
                 self.last_transcript = "Sorry, speech recognition model is still loading. Please try again in a moment."
                 with open(TRANSCRIPTION_FILE, 'w') as f:
                     f.write(self.last_transcript)
+                self.update_ui_from_state()
                 return
             
             # Save the recorded audio to a temporary WAV file
@@ -295,6 +389,8 @@ class SimpleSpeechProcessor:
             # Use Whisper to transcribe the audio
             logger.info("Transcribing audio with Whisper...")
             print("Transcribing audio with Whisper...")
+            self.root.after(0, lambda: self.status_label.config(text="Transcribing audio..."))
+            
             result = self.whisper_model.transcribe(temp_audio_path)
             transcription = result["text"].strip()
             
@@ -314,14 +410,16 @@ class SimpleSpeechProcessor:
             with open(TRANSCRIPTION_FILE, 'w') as f:
                 f.write(transcription)
             
-            # Update state
+            # Update state and UI
             self.save_speech_state()
+            self.update_ui_from_state()
             
         except Exception as e:
             logger.error(f"Error processing recording: {e}")
             self.last_transcript = f"Error processing speech: {str(e)}"
             with open(TRANSCRIPTION_FILE, 'w') as f:
                 f.write(self.last_transcript)
+            self.update_ui_from_state()
     
     def stop_listening(self):
         """Stop listening for audio input"""
@@ -333,9 +431,28 @@ class SimpleSpeechProcessor:
                 print("Microphone deactivated.")
                 logger.info("Stopped listening for audio input")
             
+            # Update state
+            self.listening = False
+            self.save_speech_state()
+            self.update_ui_from_state()
+            
         except Exception as e:
             logger.error(f"Error stopping audio stream: {e}")
             print(f"Error stopping audio: {e}")
+    
+    def test_speech(self):
+        """Test the text-to-speech functionality"""
+        test_text = "This is a test of the speech synthesis system."
+        
+        # Create a response file for the server to process
+        with open(RESPONSE_FILE, 'w') as f:
+            f.write(test_text)
+        
+        # Update state
+        self.speaking = True
+        self.last_response = test_text
+        self.save_speech_state()
+        self.update_ui_from_state()
     
     def check_for_updates(self):
         """Periodically check for updates to the speech state file"""
@@ -349,7 +466,8 @@ class SimpleSpeechProcessor:
                     current_modified = os.path.getmtime(STATE_FILE)
                     if current_modified > last_modified:
                         last_modified = current_modified
-                        self.update_state_from_file()
+                        self.load_speech_state()
+                        self.root.after(0, self.update_ui_from_state)
             except Exception as e:
                 logger.error(f"Error checking for updates: {e}")
             
@@ -372,6 +490,7 @@ class SimpleSpeechProcessor:
                         self.last_response = response
                         self.speaking = True
                         self.save_speech_state()
+                        self.root.after(0, self.update_ui_from_state)
                         
                         logger.info(f"Speaking: {response}")
                         print(f"Speaking: \"{response}\"")
@@ -397,6 +516,7 @@ class SimpleSpeechProcessor:
                         # Update state when done speaking
                         self.speaking = False
                         self.save_speech_state()
+                        self.root.after(0, self.update_ui_from_state)
                         print("Done speaking.")
                         logger.info("Done speaking")
             except Exception as e:
@@ -404,8 +524,8 @@ class SimpleSpeechProcessor:
             
             time.sleep(0.5)  # Check every half second
     
-    def shutdown(self):
-        """Clean up resources and shut down"""
+    def on_close(self):
+        """Handle window close event"""
         try:
             print("\nShutting down speech processor...")
             self.should_update = False
@@ -425,27 +545,22 @@ class SimpleSpeechProcessor:
             print("Speech processor shut down successfully.")
             logger.info("Speech processor shut down")
             
+            self.root.destroy()
+            
         except Exception as e:
             logger.error(f"Error shutting down speech processor: {e}")
             print(f"Error during shutdown: {e}")
+            self.root.destroy()
 
 def main():
     """Main entry point for the speech processor"""
     try:
         print("\n===== Speech MCP Processor =====")
-        print("Starting speech recognition system...")
-        processor = SimpleSpeechProcessor()
+        print("Starting speech recognition system with UI...")
         
-        print("\nSpeech processor is running. Press Ctrl+C to exit.")
-        # Keep the main thread alive
-        while True:
-            try:
-                time.sleep(1)
-            except KeyboardInterrupt:
-                logger.info("Keyboard interrupt received, shutting down")
-                processor.shutdown()
-                print("Speech processor shut down.")
-                break
+        root = tk.Tk()
+        app = SpeechProcessorUI(root)
+        root.mainloop()
     except Exception as e:
         logger.error(f"Error in speech processor main: {e}")
         print(f"\nERROR: Failed to start speech processor: {e}")
