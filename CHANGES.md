@@ -21,6 +21,7 @@
 - Improved process termination handling for existing UI processes
 - **Fixed path issue:** Changed UI process startup to use Python module import (`python -m speech_mcp.ui`) instead of direct file path
 - **Fixed log output:** Improved log output formatting to clean up error messages
+- **Added Tkinter UI:** Implemented a graphical user interface using Tkinter to provide visual feedback on speech processing status
 
 ## How to Test
 
