@@ -1149,6 +1149,15 @@ class SimpleSpeechProcessorUI:
             except Exception as e:
                 logger.error(f"Error creating command file: {e}")
             
+            # Remove the lock file
+            try:
+                lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_ui.lock")
+                if os.path.exists(lock_file):
+                    os.remove(lock_file)
+                    logger.info("Removed lock file")
+            except Exception as e:
+                logger.error(f"Error removing lock file: {e}")
+            
             print("Speech processor shut down successfully.")
             logger.info("Speech processor shut down successfully")
             
@@ -1171,6 +1180,43 @@ def main():
         logger.info(f"Platform: {platform.platform()}")
         logger.info(f"Python version: {platform.python_version()}")
         
+        # Check if another instance is already running
+        import psutil
+        import os
+        
+        # Create a lock file to prevent multiple instances
+        lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_ui.lock")
+        
+        # Check if the lock file exists and if the process is still running
+        if os.path.exists(lock_file):
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = int(f.read().strip())
+                
+                if psutil.pid_exists(pid):
+                    # Check if it's actually our UI process
+                    try:
+                        process = psutil.Process(pid)
+                        cmdline = process.cmdline()
+                        if len(cmdline) >= 3 and 'speech_mcp.ui' in ' '.join(cmdline):
+                            logger.warning(f"Another UI instance is already running with PID {pid}")
+                            print(f"WARNING: Another Speech UI instance is already running with PID {pid}")
+                            print("Only one instance of Speech UI can run at a time.")
+                            return
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        # Process doesn't exist or can't be accessed, ignore the lock file
+                        pass
+            except Exception as e:
+                logger.error(f"Error checking lock file: {e}")
+        
+        # Create a new lock file with our PID
+        try:
+            with open(lock_file, 'w') as f:
+                f.write(str(os.getpid()))
+            logger.info(f"Created lock file with PID {os.getpid()}")
+        except Exception as e:
+            logger.error(f"Error creating lock file: {e}")
+        
         # Log audio-related environment variables
         audio_env_vars = {k: v for k, v in os.environ.items() if 'AUDIO' in k.upper() or 'PULSE' in k.upper() or 'ALSA' in k.upper()}
         if audio_env_vars:
@@ -1182,6 +1228,15 @@ def main():
         logger.info("Starting Tkinter main loop")
         root.mainloop()
         logger.info("Tkinter main loop exited")
+        
+        # Clean up the lock file when we exit
+        try:
+            if os.path.exists(lock_file):
+                os.remove(lock_file)
+                logger.info("Removed lock file")
+        except Exception as e:
+            logger.error(f"Error removing lock file: {e}")
+            
     except Exception as e:
         logger.error(f"Error in speech processor main: {e}", exc_info=True)
         print(f"\nERROR: Failed to start speech processor: {e}")

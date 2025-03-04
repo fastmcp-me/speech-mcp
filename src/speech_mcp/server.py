@@ -238,38 +238,30 @@ def ensure_ui_is_running():
         except Exception as e:
             logger.error(f"Error checking UI process: {e}")
     
-    # Start a new UI process
-    logger.info("Starting UI process...")
-    print("Starting speech UI process...")
-    
+    # Check for any existing UI processes by looking for Python processes running speech_mcp.ui
     try:
-        # Get the path to the UI module
-        ui_module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
-        
-        # Start the UI process
-        ui_process = subprocess.Popen(
-            [sys.executable, "-m", "speech_mcp.ui"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        # Update the speech state
-        speech_state["ui_active"] = True
-        speech_state["ui_process_id"] = ui_process.pid
-        save_speech_state(speech_state)
-        
-        logger.info(f"UI process started with PID {ui_process.pid}")
-        print(f"Speech UI started with PID {ui_process.pid}")
-        
-        # Give the UI a moment to initialize
-        time.sleep(1.0)
-        
-        return True
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline', [])
+                if cmdline and len(cmdline) >= 3:
+                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
+                        # Found an existing UI process
+                        logger.info(f"Found existing UI process with PID {proc.info['pid']}")
+                        
+                        # Update our state to track this process
+                        speech_state["ui_active"] = True
+                        speech_state["ui_process_id"] = proc.info['pid']
+                        save_speech_state(speech_state)
+                        
+                        return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
     except Exception as e:
-        logger.error(f"Error starting UI process: {e}")
-        print(f"ERROR: Failed to start speech UI: {e}")
-        return False
+        logger.error(f"Error searching for existing UI processes: {e}")
+    
+    # No UI process found, we'll need to start one using the launch_ui tool
+    logger.info("No UI process found, need to use launch_ui tool")
+    return False
 
 def record_audio():
     """Record audio from the microphone and return the audio data"""
@@ -576,9 +568,6 @@ def listen_for_speech() -> str:
     logger.info("Starting to listen for speech input...")
     print("\nListening for speech input... Speak now.")
     
-    # Make sure the UI is running
-    ensure_ui_is_running()
-    
     try:
         # Record audio
         audio_file_path = record_audio()
@@ -641,6 +630,79 @@ import atexit
 atexit.register(cleanup_ui_process)
 
 @mcp.tool()
+def launch_ui() -> str:
+    """
+    Launch the speech UI.
+    
+    This will start the speech UI window that shows the microphone status and speech visualization.
+    The UI is required for visual feedback during speech recognition.
+    
+    Returns:
+        A message indicating whether the UI was successfully launched.
+    """
+    global speech_state
+    
+    logger.info("launch_ui() called")
+    print("Launching speech UI...")
+    
+    # Check if UI is already running
+    if ensure_ui_is_running():
+        logger.info("UI is already running, no need to launch")
+        return "Speech UI is already running."
+    
+    # Start a new UI process
+    try:
+        # Check for any existing UI processes first to prevent duplicates
+        existing_ui = False
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline', [])
+                if cmdline and len(cmdline) >= 3:
+                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
+                        # Found an existing UI process
+                        logger.info(f"Found existing UI process with PID {proc.info['pid']}")
+                        existing_ui = True
+                        
+                        # Update our state to track this process
+                        speech_state["ui_active"] = True
+                        speech_state["ui_process_id"] = proc.info['pid']
+                        save_speech_state(speech_state)
+                        
+                        return f"Speech UI is already running with PID {proc.info['pid']}."
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        
+        # Start a new UI process if none exists
+        if not existing_ui:
+            logger.info("Starting new UI process...")
+            print("Starting speech UI process...")
+            
+            # Start the UI process
+            ui_process = subprocess.Popen(
+                [sys.executable, "-m", "speech_mcp.ui"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Update the speech state
+            speech_state["ui_active"] = True
+            speech_state["ui_process_id"] = ui_process.pid
+            save_speech_state(speech_state)
+            
+            logger.info(f"UI process started with PID {ui_process.pid}")
+            print(f"Speech UI started with PID {ui_process.pid}")
+            
+            # Give the UI a moment to initialize
+            time.sleep(1.0)
+            
+            return f"Speech UI launched successfully with PID {ui_process.pid}."
+    except Exception as e:
+        logger.error(f"Error starting UI process: {e}")
+        print(f"ERROR: Failed to start speech UI: {e}")
+        return f"ERROR: Failed to launch Speech UI: {str(e)}"
+
+@mcp.tool()
 def start_conversation() -> str:
     """
     Start a voice conversation by beginning to listen.
@@ -667,8 +729,11 @@ def start_conversation() -> str:
         print("ERROR: Failed to initialize speech recognition in start_conversation()")
         return "ERROR: Failed to initialize speech recognition."
     
-    # Ensure the UI is running
-    ensure_ui_is_running()
+    # Check if UI is running but don't launch it automatically
+    ui_running = ensure_ui_is_running()
+    if not ui_running:
+        logger.warning("Speech UI is not running. Use launch_ui() to start it for visual feedback.")
+        print("WARNING: Speech UI is not running. Use launch_ui() for visual feedback.")
     
     # Start listening
     try:
@@ -763,8 +828,11 @@ def reply(text: str) -> str:
         print(f"ERROR: Error speaking text in reply(): {e}")
         return f"ERROR: Failed to speak text: {str(e)}"
     
-    # Ensure the UI is running
-    ensure_ui_is_running()
+    # Check if UI is running but don't launch it automatically
+    ui_running = ensure_ui_is_running()
+    if not ui_running:
+        logger.warning("Speech UI is not running. Use launch_ui() to start it for visual feedback.")
+        print("WARNING: Speech UI is not running. Use launch_ui() for visual feedback.")
     
     # Start listening for response
     try:
@@ -838,14 +906,20 @@ def usage_guide() -> str:
     
     ## How to Use
     
-    1. Start a conversation:
+    1. Launch the speech UI for visual feedback (optional but recommended):
+       ```
+       launch_ui()
+       ```
+       This starts the visual interface that shows when the microphone is active.
+       
+    2. Start a conversation:
        ```
        user_input = start_conversation()
        ```
        This initializes the speech recognition system and immediately starts listening for user input.
        Note: The first time you run this, it will download the faster-whisper model which may take a moment.
     
-    2. Reply to the user and get their response:
+    3. Reply to the user and get their response:
        ```
        user_response = reply("Your response text here")
        ```
@@ -877,10 +951,11 @@ def usage_guide() -> str:
     ## Tips
     
     - For best results, use a quiet environment and speak clearly
-    - The system automatically launches a visual UI when you start a conversation
+    - Use the `launch_ui()` function to start the visual interface:
       - The UI shows when the microphone is active and listening
       - A blue pulsing circle indicates active listening
       - A green circle indicates the system is speaking
+      - Only one UI instance can run at a time (prevents duplicates)
     - The system automatically detects silence to know when you've finished speaking
       - Silence detection waits for 5 seconds of quiet before stopping recording
       - This allows for natural pauses in speech without cutting off
