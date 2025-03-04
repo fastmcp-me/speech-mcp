@@ -140,11 +140,11 @@ def load_speech_recognition():
         return False
 
 class SimpleSpeechProcessorUI:
-    """A very simple speech processor UI that just shows status"""
+    """A speech processor UI that shows status and audio waveform visualization"""
     def __init__(self, root):
         self.root = root
         self.root.title("Speech MCP")
-        self.root.geometry("300x100")
+        self.root.geometry("600x300")  # Increased size to accommodate waveform
         
         # Initialize basic components
         print("Initializing speech processor...")
@@ -156,6 +156,11 @@ class SimpleSpeechProcessorUI:
         self.last_response = ""
         self.should_update = True
         self.stream = None
+        
+        # Audio visualization parameters
+        self.waveform_data = []
+        self.waveform_max_points = 100  # Number of points to display in waveform
+        self.waveform_update_interval = 50  # Update interval in milliseconds
         
         # Initialize PyAudio with explicit device selection
         print("Initializing audio system...")
@@ -218,13 +223,31 @@ class SimpleSpeechProcessorUI:
         # Load speech state
         self.load_speech_state()
         
-        # Create the UI components - just a status label
+        # Create the UI components
+        # Main frame
+        self.main_frame = tk.Frame(self.root)
+        self.main_frame.pack(expand=True, fill="both", padx=10, pady=10)
+        
+        # Status label
         self.status_label = tk.Label(
-            self.root, 
+            self.main_frame, 
             text="Initializing...", 
             font=('Arial', 16)
         )
-        self.status_label.pack(expand=True, fill="both", padx=20, pady=20)
+        self.status_label.pack(fill="x", pady=(0, 10))
+        
+        # Waveform canvas
+        self.waveform_frame = tk.Frame(self.main_frame, bg="#f0f0f0")
+        self.waveform_frame.pack(expand=True, fill="both")
+        
+        self.waveform_canvas = tk.Canvas(
+            self.waveform_frame, 
+            bg="#f0f0f0", 
+            height=150,
+            highlightthickness=1,
+            highlightbackground="#cccccc"
+        )
+        self.waveform_canvas.pack(expand=True, fill="both", padx=5, pady=5)
         
         # Load whisper in a background thread
         print("Checking for speech recognition module...")
@@ -325,10 +348,127 @@ class SimpleSpeechProcessorUI:
         """Update the UI to reflect the current speech state"""
         if self.listening:
             self.status_label.config(text="Listening...")
+            # Start waveform visualization if not already running
+            self.root.after(0, self.update_waveform)
         elif self.speaking:
             self.status_label.config(text="Speaking...")
         else:
             self.status_label.config(text="Ready")
+            # Clear waveform when not listening
+            self.waveform_canvas.delete("all")
+            canvas_width = self.waveform_canvas.winfo_width()
+            canvas_height = self.waveform_canvas.winfo_height()
+            if canvas_width > 1 and canvas_height > 1:
+                self.waveform_canvas.create_line(
+                    0, canvas_height // 2, 
+                    canvas_width, canvas_height // 2, 
+                    fill="#cccccc", width=1
+                )
+    
+    def update_waveform(self):
+        """Update the waveform visualization on the canvas"""
+        try:
+            if not self.listening or not hasattr(self, 'waveform_data') or len(self.waveform_data) == 0:
+                # Clear the canvas if not listening or no data
+                self.waveform_canvas.delete("all")
+                # Draw a horizontal line in the middle
+                canvas_width = self.waveform_canvas.winfo_width()
+                canvas_height = self.waveform_canvas.winfo_height()
+                if canvas_width > 1 and canvas_height > 1:  # Make sure canvas is visible
+                    self.waveform_canvas.create_line(
+                        0, canvas_height // 2, 
+                        canvas_width, canvas_height // 2, 
+                        fill="#cccccc", width=1
+                    )
+                return
+            
+            # Get canvas dimensions
+            canvas_width = self.waveform_canvas.winfo_width()
+            canvas_height = self.waveform_canvas.winfo_height()
+            
+            if canvas_width <= 1 or canvas_height <= 1:
+                # Canvas not yet properly sized
+                self.root.after(100, self.update_waveform)
+                return
+            
+            # Clear the canvas
+            self.waveform_canvas.delete("all")
+            
+            # Draw the waveform
+            if len(self.waveform_data) > 1:
+                # Calculate the x-step between points
+                x_step = canvas_width / (len(self.waveform_data) - 1)
+                
+                # Create line segments for the waveform
+                points = []
+                for i, amplitude in enumerate(self.waveform_data):
+                    x = i * x_step
+                    # Scale amplitude to fit canvas height (0.5 amplitude = full height)
+                    y = canvas_height // 2 - (amplitude * canvas_height)
+                    points.append(x)
+                    points.append(y)
+                
+                # Draw the waveform line
+                if len(points) >= 4:  # Need at least 2 points (4 coordinates)
+                    self.waveform_canvas.create_line(
+                        points, 
+                        fill="#4287f5",  # Blue color
+                        width=2,
+                        smooth=True  # Smooth the line
+                    )
+                
+                # Draw the mirrored waveform (bottom half)
+                mirror_points = []
+                for i, amplitude in enumerate(self.waveform_data):
+                    x = i * x_step
+                    # Mirror the amplitude
+                    y = canvas_height // 2 + (amplitude * canvas_height)
+                    mirror_points.append(x)
+                    mirror_points.append(y)
+                
+                if len(mirror_points) >= 4:
+                    self.waveform_canvas.create_line(
+                        mirror_points, 
+                        fill="#4287f5", 
+                        width=2,
+                        smooth=True
+                    )
+            
+            # Draw a horizontal line in the middle
+            self.waveform_canvas.create_line(
+                0, canvas_height // 2, 
+                canvas_width, canvas_height // 2, 
+                fill="#cccccc", width=1
+            )
+            
+            # Schedule the next update
+            if self.listening:
+                self.root.after(self.waveform_update_interval, self.update_waveform)
+        except Exception as e:
+            logger.error(f"Error updating waveform: {e}", exc_info=True)
+            # Try again after a delay
+            self.root.after(self.waveform_update_interval * 2, self.update_waveform)
+    
+    def process_audio_for_visualization(self, audio_data):
+        """Process audio data for visualization"""
+        try:
+            # Convert to numpy array
+            data = np.frombuffer(audio_data, dtype=np.int16)
+            
+            # Normalize the data to range [-1, 1]
+            normalized = data.astype(float) / 32768.0
+            
+            # Take absolute value to get amplitude
+            amplitude = np.abs(normalized).mean()
+            
+            # Add to waveform data
+            self.waveform_data.append(amplitude)
+            
+            # Keep only the most recent points
+            if len(self.waveform_data) > self.waveform_max_points:
+                self.waveform_data = self.waveform_data[-self.waveform_max_points:]
+        except Exception as e:
+            logger.error(f"Error processing audio for visualization: {e}", exc_info=True)
     
     def start_listening(self):
         """Start listening for audio input"""
@@ -337,6 +477,9 @@ class SimpleSpeechProcessorUI:
             
             # Play start listening notification sound
             threading.Thread(target=play_audio_file, args=(START_LISTENING_SOUND,), daemon=True).start()
+            
+            # Reset waveform data
+            self.waveform_data = []
             
             def audio_callback(in_data, frame_count, time_info, status):
                 try:
@@ -369,6 +512,9 @@ class SimpleSpeechProcessorUI:
                     # Store audio data for processing
                     if hasattr(self, 'audio_frames'):
                         self.audio_frames.append(in_data)
+                        
+                        # Process audio for visualization
+                        self.process_audio_for_visualization(in_data)
                         
                         # Periodically log audio levels for debugging
                         if len(self.audio_frames) % 20 == 0:  # Log every ~1 second (20 chunks at 1024 samples)
@@ -619,6 +765,9 @@ class SimpleSpeechProcessorUI:
             else:
                 logger.debug("No active audio stream to close")
             
+            # Clear waveform data
+            self.waveform_data = []
+            
             # Update state
             self.listening = False
             self.save_speech_state()
@@ -683,6 +832,28 @@ class SimpleSpeechProcessorUI:
                         self.save_speech_state()
                         self.root.after(0, self.update_ui_from_state)
                         
+                        # Create a simple speaking animation on the waveform
+                        def animate_speaking():
+                            if not self.speaking:
+                                return
+                                
+                            # Generate some random waveform data to simulate speaking
+                            self.waveform_data = []
+                            for i in range(self.waveform_max_points):
+                                # Generate a random amplitude between 0.05 and 0.2
+                                amplitude = 0.05 + (np.random.random() * 0.15)
+                                self.waveform_data.append(amplitude)
+                            
+                            # Update the waveform
+                            self.update_waveform()
+                            
+                            # Schedule the next animation frame if still speaking
+                            if self.speaking:
+                                self.root.after(100, animate_speaking)
+                        
+                        # Start the speaking animation
+                        self.root.after(0, animate_speaking)
+                        
                         logger.info(f"Speaking text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
                         print(f"Speaking: \"{response}\"")
                         
@@ -722,6 +893,7 @@ class SimpleSpeechProcessorUI:
                         
                         # Update state when done speaking
                         self.speaking = False
+                        self.waveform_data = []  # Clear waveform data
                         self.save_speech_state()
                         self.root.after(0, self.update_ui_from_state)
                         print("Done speaking.")
