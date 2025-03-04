@@ -932,3 +932,26 @@ def usage_guide() -> str:
     - The system automatically detects silence to know when you've finished speaking
     - The listening timeout is set to 10 minutes to allow for natural pauses in conversation
     """
+
+@mcp.resource(uri="mcp://speech/kokoro_tts")
+def kokoro_tts_guide() -> str:
+    """
+    Return information about the Kokoro TTS adapter.
+    """
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "kokoro_tts_adapter.md"), 'r') as f:
+            return f.read()
+    except Exception as e:
+        logger.error(f"Error reading Kokoro TTS guide: {e}")
+        return """
+        # Kokoro TTS Adapter
+        
+        Kokoro is a high-quality neural text-to-speech engine that can be used with speech-mcp.
+        
+        To install Kokoro, run:
+        ```
+        python scripts/install_kokoro.py
+        ```
+        
+        For more information, see the documentation in the speech-mcp repository.
+        """

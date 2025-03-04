@@ -70,26 +70,83 @@ def play_audio_file(file_path):
         logger.error(f"Error playing audio notification: {e}")
 
 # For text-to-speech
+# Always prioritize Kokoro as the primary TTS engine if available
 try:
-    import pyttsx3
-    tts_engine = pyttsx3.init()
-    tts_available = True
-    logger.info("Text-to-speech engine initialized successfully")
-    print("Text-to-speech engine initialized successfully!")
+    print("Initializing Kokoro as primary TTS engine...")
+    logger.info("Initializing Kokoro as primary TTS engine")
     
-    # Log available voices
-    voices = tts_engine.getProperty('voices')
-    logger.debug(f"Available TTS voices: {len(voices)}")
-    for i, voice in enumerate(voices):
-        logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+    # Import and initialize Kokoro adapter
+    try:
+        from speech_mcp.tts_adapters.kokoro_adapter import KokoroTTS
+        
+        # Initialize with Kokoro voice settings
+        tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+        tts_available = True
+        logger.info("Kokoro TTS adapter initialized successfully as primary TTS engine")
+        print("Kokoro TTS adapter initialized successfully as primary TTS engine!")
+        
+        # Log available voices
+        voices = tts_engine.get_available_voices()
+        logger.debug(f"Available Kokoro TTS voices: {len(voices)}")
+        for i, voice in enumerate(voices):
+            logger.debug(f"Voice {i}: {voice}")
+        print(f"Available Kokoro voices: {', '.join(voices[:5])}{' and more...' if len(voices) > 5 else ''}")
+    except ImportError as e:
+        # If the adapter is available but Kokoro itself is not installed
+        logger.warning(f"Kokoro package not available: {e}. Falling back to pyttsx3.")
+        print("WARNING: Kokoro package not available. Falling back to pyttsx3.")
+        raise ImportError("Kokoro package not installed")
+    
 except ImportError as e:
-    logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
-    print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
-    tts_available = False
+    logger.warning(f"Kokoro adapter not available: {e}. Falling back to pyttsx3.")
+    print("WARNING: Kokoro adapter not available. Falling back to pyttsx3.")
+    
+    # Fall back to pyttsx3
+    try:
+        import pyttsx3
+        tts_engine = pyttsx3.init()
+        tts_available = True
+        logger.info("pyttsx3 text-to-speech engine initialized as fallback")
+        print("pyttsx3 text-to-speech engine initialized as fallback!")
+        
+        # Log available voices
+        voices = tts_engine.getProperty('voices')
+        logger.debug(f"Available pyttsx3 voices: {len(voices)}")
+        for i, voice in enumerate(voices):
+            logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+    except ImportError as e:
+        logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
+        print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
+        tts_available = False
+    except Exception as e:
+        logger.error(f"Error initializing text-to-speech engine: {e}")
+        print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
+        tts_available = False
 except Exception as e:
-    logger.error(f"Error initializing text-to-speech engine: {e}")
-    print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
-    tts_available = False
+    logger.error(f"Error initializing Kokoro TTS adapter: {e}")
+    print(f"WARNING: Error initializing Kokoro TTS adapter: {e}. Falling back to pyttsx3.")
+    
+    # Fall back to pyttsx3
+    try:
+        import pyttsx3
+        tts_engine = pyttsx3.init()
+        tts_available = True
+        logger.info("pyttsx3 text-to-speech engine initialized as fallback")
+        print("pyttsx3 text-to-speech engine initialized as fallback!")
+        
+        # Log available voices
+        voices = tts_engine.getProperty('voices')
+        logger.debug(f"Available pyttsx3 voices: {len(voices)}")
+        for i, voice in enumerate(voices):
+            logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+    except ImportError as e:
+        logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
+        print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
+        tts_available = False
+    except Exception as e:
+        logger.error(f"Error initializing text-to-speech engine: {e}")
+        print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
+        tts_available = False
 
 # These will be imported later when needed
 whisper_loaded = False
@@ -953,23 +1010,32 @@ class SimpleSpeechProcessorUI:
                         # Use actual text-to-speech if available
                         if tts_available:
                             try:
-                                # Use pyttsx3 for actual speech
-                                logger.debug("Using pyttsx3 for text-to-speech")
+                                logger.debug("Using TTS engine for text-to-speech")
                                 
-                                # Log TTS settings
-                                rate = tts_engine.getProperty('rate'* 0.85)
-                                volume = tts_engine.getProperty('volume')
-                                voice = tts_engine.getProperty('voice')
-                                logger.debug(f"TTS settings - Rate: {rate}, Volume: {volume}, Voice: {voice}")
+                                # If we're using our Kokoro adapter
+                                if hasattr(tts_engine, 'speak'):
+                                    # Use the speak method directly
+                                    tts_start = time.time()
+                                    tts_engine.speak(response)
+                                    tts_duration = time.time() - tts_start
+                                    logger.info(f"Kokoro TTS completed in {tts_duration:.2f} seconds")
+                                    print("Speech completed.")
+                                else:
+                                    # Use pyttsx3 directly
+                                    # Log TTS settings
+                                    rate = tts_engine.getProperty('rate')
+                                    volume = tts_engine.getProperty('volume')
+                                    voice = tts_engine.getProperty('voice')
+                                    logger.debug(f"TTS settings - Rate: {rate}, Volume: {volume}, Voice: {voice}")
 
-                                # Speak the text
-                                tts_start = time.time()
-                                tts_engine.say(response)
-                                tts_engine.runAndWait()
-                                tts_duration = time.time() - tts_start
-                                
-                                logger.info(f"Speech completed in {tts_duration:.2f} seconds")
-                                print("Speech completed.")
+                                    # Speak the text
+                                    tts_start = time.time()
+                                    tts_engine.say(response)
+                                    tts_engine.runAndWait()
+                                    tts_duration = time.time() - tts_start
+                                    
+                                    logger.info(f"Speech completed in {tts_duration:.2f} seconds")
+                                    print("Speech completed.")
                             except Exception as e:
                                 logger.error(f"Error using text-to-speech: {e}", exc_info=True)
                                 print(f"Error using text-to-speech: {e}")

@@ -66,6 +66,19 @@ goose session --with-extension "python -m speech_mcp"
 - pyttsx3 (for text-to-speech)
 - psutil (for process management)
 
+### Optional Dependencies
+
+- **Kokoro TTS**: For high-quality text-to-speech with multiple voices
+  - To install Kokoro, you can use pip with optional dependencies:
+    ```bash
+    pip install speech-mcp[kokoro]     # Basic Kokoro support with English
+    pip install speech-mcp[ja]         # Add Japanese support
+    pip install speech-mcp[zh]         # Add Chinese support
+    pip install speech-mcp[all]        # All languages and features
+    ```
+  - Alternatively, run the installation script: `python scripts/install_kokoro.py`
+  - See [Kokoro TTS Guide](docs/kokoro-tts-guide.md) for more information
+
 ## Usage
 
 To use this MCP with Goose, you can:
@@ -108,6 +121,7 @@ If you encounter issues with the extension freezing or not responding:
 
 ## Recent Fixes
 
+- **Kokoro TTS integration**: Added support for high-quality neural text-to-speech
 - **Improved error handling**: Better recovery from common failure modes
 - **Timeout management**: Reduced timeouts and added fallback mechanisms
 - **Process management**: Better handling of UI process startup and termination
@@ -124,6 +138,22 @@ The MCP uses faster-whisper for speech recognition:
 - Processes audio locally without sending data to external services
 - Automatically detects when the user has finished speaking
 - Provides improved performance over the original Whisper implementation
+
+### Text-to-Speech
+
+The MCP supports multiple text-to-speech engines:
+
+#### Default: pyttsx3
+- Uses system voices available on your computer
+- Works out of the box without additional setup
+- Limited voice quality and customization
+
+#### Optional: Kokoro TTS
+- High-quality neural text-to-speech with multiple voices
+- Lightweight model (82M parameters) that runs efficiently on CPU
+- Multiple voice styles: casual, serious, robot, bright, etc.
+- Supports multiple languages (English, Japanese, Chinese, Spanish, etc.)
+- To install: `python scripts/install_kokoro.py`
 
 ## License
 

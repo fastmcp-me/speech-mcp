@@ -1,7 +1,7 @@
 [project]
 name = "speech-mcp"
-version = "0.3.0"
-description = "Speech MCP Server with command-line interface"
+version = "0.3.1"
+description = "Speech MCP Server with command-line interface and Kokoro TTS support"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -14,6 +14,23 @@ dependencies = [
     "numba>=0.57.0",  # Specify a newer version of numba that supports Python 3.10
     "pyttsx3>=2.90",   # Add pyttsx3 for text-to-speech
     "psutil>=5.9.0"    # Add psutil for process management
+]
+
+[project.optional-dependencies]
+kokoro = [
+    "kokoro>=0.8.4",   # Kokoro TTS
+    "soundfile",       # For audio file handling
+    "torch",           # Required by Kokoro
+    "misaki[en]"       # G2P library for English
+]
+ja = [
+    "misaki[ja]"       # Japanese support for Kokoro
+]
+zh = [
+    "misaki[zh]"       # Chinese support for Kokoro
+]
+all = [
+    "speech-mcp[kokoro,ja,zh]"  # All optional dependencies
 ]
 
 [project.scripts]
