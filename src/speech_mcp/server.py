@@ -195,7 +195,7 @@ def ensure_ui_running():
         save_speech_state(speech_state)
         
         # Give the UI time to start up
-        startup_time = 2  # seconds
+        startup_time = 0.5  # reduced from 2 seconds to 0.5 seconds
         logger.debug(f"Waiting {startup_time} seconds for UI to initialize")
         print(f"DEBUG: Waiting {startup_time} seconds for UI to initialize")
         time.sleep(startup_time)
@@ -464,9 +464,7 @@ def speak_text(text: str) -> str:
         words = len(text) / 5
         speaking_time = words / 2.5  # Time in seconds
         
-        # Add a small buffer
-        speaking_time += 1.0
-        
+
         logger.debug(f"Estimated speaking time: {speaking_time:.2f} seconds for {words:.1f} words")
         
         # Wait for the estimated speaking time
@@ -701,7 +699,7 @@ def start_conversation() -> str:
     # Give the UI a moment to fully initialize
     logger.debug("Waiting for UI to fully initialize")
     print("DEBUG: Waiting for UI to fully initialize")
-    time.sleep(3)  # Increased from 2s to 3s
+    time.sleep(1)  # Reduced from 3s to 1s
     
     # Check if UI process is still running
     if speech_state["ui_process"] is None or speech_state["ui_process"].poll() is not None:
@@ -792,6 +790,7 @@ def reply(text: str) -> str:
     print(f"reply() called with text: {text[:50]}{'...' if len(text) > 50 else ''}")
     
     # Reset listening and speaking states to ensure we're in a clean state
+    # and immediately prepare for the next interaction
     speech_state["listening"] = False
     speech_state["speaking"] = False
     save_speech_state(speech_state)

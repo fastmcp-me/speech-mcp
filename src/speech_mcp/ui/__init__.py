@@ -680,11 +680,11 @@ class SimpleSpeechProcessorUI:
             logger.info("Starting silence detection")
             time.sleep(0.5)
             
-            # Adjusted silence detection parameters based on debug tool findings
-            silence_threshold = 0.01  # Increased based on debug tool mean amplitude of ~0.026
+            # Adjusted silence detection parameters for faster response
+            silence_threshold = 0.01  # Threshold for silence detection
             silence_duration = 0
-            max_silence = 3.0  # Increased to give more time for natural pauses
-            check_interval = 0.2  # Increased to reduce CPU usage and allow for smoother detection
+            max_silence = 1.5  # Reduced from 3.0s to 1.5s for faster response
+            check_interval = 0.1  # Reduced from 0.2s to 0.1s for more responsive detection
             
             logger.debug(f"Silence detection parameters: threshold={silence_threshold}, max_silence={max_silence}s, check_interval={check_interval}s")
             
@@ -884,7 +884,7 @@ class SimpleSpeechProcessorUI:
             except Exception as e:
                 logger.error(f"Error checking for updates: {e}")
             
-            time.sleep(0.5)  # Check every half second
+            time.sleep(0.1)  # Check every 100ms for faster response
     
     def check_for_responses(self):
         """Periodically check for new responses to speak"""
@@ -957,11 +957,11 @@ class SimpleSpeechProcessorUI:
                                 logger.debug("Using pyttsx3 for text-to-speech")
                                 
                                 # Log TTS settings
-                                rate = tts_engine.getProperty('rate')
+                                rate = tts_engine.getProperty('rate'* 0.85)
                                 volume = tts_engine.getProperty('volume')
                                 voice = tts_engine.getProperty('voice')
                                 logger.debug(f"TTS settings - Rate: {rate}, Volume: {volume}, Voice: {voice}")
-                                
+
                                 # Speak the text
                                 tts_start = time.time()
                                 tts_engine.say(response)
@@ -994,7 +994,7 @@ class SimpleSpeechProcessorUI:
             except Exception as e:
                 logger.error(f"Error checking for responses: {e}", exc_info=True)
             
-            time.sleep(0.5)  # Check every half second
+            time.sleep(0.1)  # Check every 100ms for faster response
     
     def on_close(self):
         """Handle window close event"""
