@@ -53,18 +53,20 @@ def load_speech_state():
         return DEFAULT_SPEECH_STATE.copy()
 
 # Save speech state to file
-def save_speech_state(state):
+def save_speech_state(state, create_response_file=False):
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(state, f)
         
-        # Create or update response file for UI communication
-        # This helps ensure the UI is properly notified of state changes
-        RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
-        if state.get("speaking", False):
-            # If speaking, write the response to the file for the UI to pick up
-            with open(RESPONSE_FILE, 'w') as f:
-                f.write(state.get("last_response", ""))
+        # Only create response file if specifically requested
+        if create_response_file:
+            # Create or update response file for UI communication
+            # This helps ensure the UI is properly notified of state changes
+            RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
+            if state.get("speaking", False):
+                # If speaking, write the response to the file for the UI to pick up
+                with open(RESPONSE_FILE, 'w') as f:
+                    f.write(state.get("last_response", ""))
         
         # Create a special command file to signal state changes to the UI
         COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
@@ -251,7 +253,7 @@ def ensure_ui_is_running():
                         # Update our state to track this process
                         speech_state["ui_active"] = True
                         speech_state["ui_process_id"] = proc.info['pid']
-                        save_speech_state(speech_state)
+                        save_speech_state(speech_state, False)
                         
                         return True
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -350,7 +352,7 @@ def record_audio():
                 # Ensure UI state is still set to listening
                 if not speech_state.get("listening", False):
                     speech_state["listening"] = True
-                    save_speech_state(speech_state)
+                    save_speech_state(speech_state, False)
             
             # Check for silence
             if amplitude < silence_threshold:
@@ -471,7 +473,9 @@ def speak_text(text):
     # Set speaking state
     speech_state["speaking"] = True
     speech_state["last_response"] = text
-    save_speech_state(speech_state)
+    
+    # Save state but don't create response file - we'll handle TTS directly
+    save_speech_state(speech_state, False)
     
     try:
         logger.info(f"Speaking text ({len(text)} chars): {text[:100]}{'...' if len(text) > 100 else ''}")
@@ -490,23 +494,13 @@ def speak_text(text):
                 
                 # Update state
                 speech_state["speaking"] = False
-                save_speech_state(speech_state)
+                save_speech_state(speech_state, False)
                 return f"Simulated speaking: {text}"
         
-        # Use TTS engine to speak text
+        # Use TTS engine to speak text directly without going through the UI
         if hasattr(tts_engine, 'speak'):
             # Use the speak method directly (Kokoro adapter)
             tts_start = time.time()
-            
-            # Periodically update state during long speech to keep UI in sync
-            def update_speaking_state():
-                if speech_state.get("speaking", False):
-                    speech_state["speaking"] = True
-                    save_speech_state(speech_state)
-                    threading.Timer(0.5, update_speaking_state).start()
-            
-            # Start the update timer
-            update_speaking_state()
             
             # Speak the text
             tts_engine.speak(text)
@@ -517,16 +511,6 @@ def speak_text(text):
             # Use pyttsx3 directly
             tts_start = time.time()
             
-            # Periodically update state during long speech to keep UI in sync
-            def update_speaking_state():
-                if speech_state.get("speaking", False):
-                    speech_state["speaking"] = True
-                    save_speech_state(speech_state)
-                    threading.Timer(0.5, update_speaking_state).start()
-            
-            # Start the update timer
-            update_speaking_state()
-            
             # Speak the text
             tts_engine.say(text)
             tts_engine.runAndWait()
@@ -536,7 +520,7 @@ def speak_text(text):
         
         # Update state
         speech_state["speaking"] = False
-        save_speech_state(speech_state)
+        save_speech_state(speech_state, False)
         
         logger.info("Done speaking")
         print("Done speaking.")
@@ -545,7 +529,7 @@ def speak_text(text):
     except Exception as e:
         # Update state on error
         speech_state["speaking"] = False
-        save_speech_state(speech_state)
+        save_speech_state(speech_state, False)
         
         logger.error(f"Error during text-to-speech: {e}", exc_info=True)
         print(f"ERROR: Failed to speak text: {e}")
@@ -563,7 +547,7 @@ def listen_for_speech() -> str:
     
     # Set listening state
     speech_state["listening"] = True
-    save_speech_state(speech_state)
+    save_speech_state(speech_state, False)
     
     logger.info("Starting to listen for speech input...")
     print("\nListening for speech input... Speak now.")
@@ -581,14 +565,14 @@ def listen_for_speech() -> str:
         # Update state
         speech_state["listening"] = False
         speech_state["last_transcript"] = transcription
-        save_speech_state(speech_state)
+        save_speech_state(speech_state, False)
         
         return transcription
     
     except Exception as e:
         # Update state on error
         speech_state["listening"] = False
-        save_speech_state(speech_state)
+        save_speech_state(speech_state, False)
         
         logger.error(f"Error during speech recognition: {e}", exc_info=True)
         print(f"ERROR: Speech recognition failed: {e}")
@@ -619,7 +603,7 @@ def cleanup_ui_process():
             # Update state
             speech_state["ui_active"] = False
             speech_state["ui_process_id"] = None
-            save_speech_state(speech_state)
+            save_speech_state(speech_state, False)
             
             logger.info("UI process terminated")
         except Exception as e:
@@ -666,7 +650,7 @@ def launch_ui() -> str:
                         # Update our state to track this process
                         speech_state["ui_active"] = True
                         speech_state["ui_process_id"] = proc.info['pid']
-                        save_speech_state(speech_state)
+                        save_speech_state(speech_state, False)
                         
                         return f"Speech UI is already running with PID {proc.info['pid']}."
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -698,7 +682,7 @@ def launch_ui() -> str:
             # Update the speech state
             speech_state["ui_active"] = True
             speech_state["ui_process_id"] = ui_process.pid
-            save_speech_state(speech_state)
+            save_speech_state(speech_state, False)
             
             logger.info(f"UI process started with PID {ui_process.pid}")
             print(f"Speech UI started with PID {ui_process.pid}")
@@ -769,7 +753,7 @@ def start_conversation() -> str:
     
     # Force reset the speech state to avoid any stuck states
     speech_state = DEFAULT_SPEECH_STATE.copy()
-    save_speech_state(speech_state)
+    save_speech_state(speech_state, False)
     logger.info("Reset speech state to defaults")
     print("Reset speech state to defaults")
     
@@ -792,7 +776,7 @@ def start_conversation() -> str:
         
         # Set listening state before starting to ensure UI shows the correct state
         speech_state["listening"] = True
-        save_speech_state(speech_state)
+        save_speech_state(speech_state, False)
         
         # Create a special command file to signal LISTEN state to the UI
         # This ensures the audio blips are played
@@ -833,7 +817,7 @@ def start_conversation() -> str:
             
             # Signal that we're done listening
             speech_state["listening"] = False
-            save_speech_state(speech_state)
+            save_speech_state(speech_state, False)
             
             # Create a special command file to signal IDLE state to the UI
             # This ensures the audio blips are played
@@ -851,7 +835,7 @@ def start_conversation() -> str:
             
             # Update state to stop listening
             speech_state["listening"] = False
-            save_speech_state(speech_state)
+            save_speech_state(speech_state, False)
             
             # Signal that we're done listening
             try:
@@ -873,7 +857,7 @@ def start_conversation() -> str:
         
         # Update state to stop listening
         speech_state["listening"] = False
-        save_speech_state(speech_state)
+        save_speech_state(speech_state, False)
         
         # Signal that we're done listening
         COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
@@ -911,13 +895,25 @@ def reply(text: str) -> str:
     # Reset listening and speaking states to ensure we're in a clean state
     speech_state["listening"] = False
     speech_state["speaking"] = False
-    save_speech_state(speech_state)
+    save_speech_state(speech_state, False)
+    
+    # Clear any existing response file to prevent double-speaking
+    RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
+    try:
+        if os.path.exists(RESPONSE_FILE):
+            os.remove(RESPONSE_FILE)
+            logger.debug("Removed existing response file")
+    except Exception as e:
+        logger.warning(f"Error removing existing response file: {e}")
     
     # Speak the text
     try:
         logger.info("Speaking text in reply()")
         print("INFO: Speaking text in reply()")
         speak_text(text)
+        
+        # Add a small delay to ensure speaking is complete
+        time.sleep(0.5)
     except Exception as e:
         logger.error(f"Error speaking text in reply(): {e}", exc_info=True)
         print(f"ERROR: Error speaking text in reply(): {e}")
@@ -967,7 +963,7 @@ def reply(text: str) -> str:
             
             # Update state to stop listening
             speech_state["listening"] = False
-            save_speech_state(speech_state)
+            save_speech_state(speech_state, False)
             
             # Create an emergency transcription
             emergency_message = f"ERROR: Timeout waiting for speech transcription after {timeout} seconds."
@@ -981,7 +977,7 @@ def reply(text: str) -> str:
         
         # Update state to stop listening
         speech_state["listening"] = False
-        save_speech_state(speech_state)
+        save_speech_state(speech_state, False)
         
         # Return an error message instead of raising an exception
         error_message = f"ERROR: Failed to listen for response: {str(e)}"
