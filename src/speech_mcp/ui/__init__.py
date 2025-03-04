@@ -21,10 +21,53 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Path to audio notification files
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "audio")
+START_LISTENING_SOUND = os.path.join(AUDIO_DIR, "start_listening.wav")
+STOP_LISTENING_SOUND = os.path.join(AUDIO_DIR, "stop_listening.wav")
+
 # Import other dependencies
 import numpy as np
 import wave
 import pyaudio
+
+# For playing notification sounds
+def play_audio_file(file_path):
+    """Play an audio file using PyAudio"""
+    try:
+        if not os.path.exists(file_path):
+            logger.error(f"Audio file not found: {file_path}")
+            return
+        
+        logger.debug(f"Playing audio notification: {file_path}")
+        
+        # Open the wave file
+        with wave.open(file_path, 'rb') as wf:
+            # Create PyAudio instance
+            p = pyaudio.PyAudio()
+            
+            # Open stream
+            stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
+                            channels=wf.getnchannels(),
+                            rate=wf.getframerate(),
+                            output=True)
+            
+            # Read data in chunks and play
+            chunk_size = 1024
+            data = wf.readframes(chunk_size)
+            
+            while data:
+                stream.write(data)
+                data = wf.readframes(chunk_size)
+            
+            # Close stream and PyAudio
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+            
+            logger.debug("Audio notification played successfully")
+    except Exception as e:
+        logger.error(f"Error playing audio notification: {e}")
 
 # For text-to-speech
 try:
@@ -291,6 +334,9 @@ class SimpleSpeechProcessorUI:
         """Start listening for audio input"""
         try:
             logger.info("Starting audio recording")
+            
+            # Play start listening notification sound
+            threading.Thread(target=play_audio_file, args=(START_LISTENING_SOUND,), daemon=True).start()
             
             def audio_callback(in_data, frame_count, time_info, status):
                 try:
@@ -567,6 +613,9 @@ class SimpleSpeechProcessorUI:
                 self.stream = None
                 print("Microphone deactivated.")
                 logger.info("Audio stream closed successfully")
+                
+                # Play stop listening notification sound
+                threading.Thread(target=play_audio_file, args=(STOP_LISTENING_SOUND,), daemon=True).start()
             else:
                 logger.debug("No active audio stream to close")
             

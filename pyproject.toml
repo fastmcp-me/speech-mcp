@@ -1,6 +1,6 @@
 [project]
 name = "speech-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "Speech MCP Server with command-line interface"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,3 +22,9 @@ speech-mcp = "speech_mcp:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "src/speech_mcp/**/*.py",
+    "src/speech_mcp/resources/audio/*.wav",
+]
