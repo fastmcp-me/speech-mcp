@@ -156,6 +156,7 @@ speech_recognition_loaded = False
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_state.json")
 TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "transcription.txt")
 RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "response.txt")
+COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ui_command.txt")
 
 # Audio parameters
 CHUNK = 1024
@@ -213,6 +214,14 @@ class SimpleSpeechProcessorUI:
         self.last_response = ""
         self.should_update = True
         self.stream = None
+        
+        # Create initial command file to indicate UI is ready
+        try:
+            with open(COMMAND_FILE, 'w') as f:
+                f.write("UI_READY")
+            logger.info("Created initial UI_READY command file")
+        except Exception as e:
+            logger.error(f"Error creating initial command file: {e}")
         
         # Audio visualization parameters
         self.waveform_data = []
@@ -407,6 +416,9 @@ class SimpleSpeechProcessorUI:
             self.status_label.config(text="Listening...")
             # Start visualization if not already running
             self.root.after(0, self.update_waveform)
+            # Start listening if not already started
+            if not hasattr(self, 'stream') or self.stream is None:
+                self.root.after(0, self.start_listening)
         elif self.speaking:
             self.status_label.config(text="Speaking...")
             # Start visualization for speaking
@@ -415,6 +427,9 @@ class SimpleSpeechProcessorUI:
             self.status_label.config(text="Ready")
             # Update visualization to show idle state
             self.root.after(0, self.update_waveform)
+            # Stop listening if still active
+            if hasattr(self, 'stream') and self.stream is not None:
+                self.root.after(0, self.stop_listening)
     
     def update_waveform(self):
         """Update the circular audio visualization on the canvas"""
@@ -925,17 +940,52 @@ class SimpleSpeechProcessorUI:
             self.update_ui_from_state()
     
     def check_for_updates(self):
-        """Periodically check for updates to the speech state file"""
-        last_modified = 0
+        """Periodically check for updates to the speech state file and command file"""
+        last_modified_state = 0
+        last_modified_command = 0
+        
         if os.path.exists(STATE_FILE):
-            last_modified = os.path.getmtime(STATE_FILE)
+            last_modified_state = os.path.getmtime(STATE_FILE)
         
         while self.should_update:
             try:
+                # Check for command file first (higher priority)
+                if os.path.exists(COMMAND_FILE):
+                    current_modified = os.path.getmtime(COMMAND_FILE)
+                    if current_modified > last_modified_command:
+                        last_modified_command = current_modified
+                        
+                        # Read the command
+                        try:
+                            with open(COMMAND_FILE, 'r') as f:
+                                command = f.read().strip()
+                            
+                            logger.debug(f"Received UI command: {command}")
+                            
+                            # Process the command
+                            if command == "LISTEN":
+                                if not self.listening:
+                                    self.listening = True
+                                    self.speaking = False
+                                    self.root.after(0, self.start_listening)
+                                    self.root.after(0, self.update_ui_from_state)
+                            elif command == "SPEAK":
+                                if not self.speaking:
+                                    self.listening = False
+                                    self.speaking = True
+                                    self.root.after(0, self.update_ui_from_state)
+                            elif command == "IDLE":
+                                self.listening = False
+                                self.speaking = False
+                                self.root.after(0, self.update_ui_from_state)
+                        except Exception as e:
+                            logger.error(f"Error processing command: {e}")
+                
+                # Also check state file for other updates
                 if os.path.exists(STATE_FILE):
                     current_modified = os.path.getmtime(STATE_FILE)
-                    if current_modified > last_modified:
-                        last_modified = current_modified
+                    if current_modified > last_modified_state:
+                        last_modified_state = current_modified
                         self.load_speech_state()
                         self.root.after(0, self.update_ui_from_state)
             except Exception as e:
@@ -1090,6 +1140,14 @@ class SimpleSpeechProcessorUI:
             self.listening = False
             self.speaking = False
             self.save_speech_state()
+            
+            # Write a UI_CLOSED command to the command file
+            try:
+                with open(COMMAND_FILE, 'w') as f:
+                    f.write("UI_CLOSED")
+                logger.info("Created UI_CLOSED command file")
+            except Exception as e:
+                logger.error(f"Error creating command file: {e}")
             
             print("Speech processor shut down successfully.")
             logger.info("Speech processor shut down successfully")

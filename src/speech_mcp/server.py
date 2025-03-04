@@ -5,6 +5,8 @@ import logging
 import time
 import threading
 import tempfile
+import subprocess
+import psutil
 from typing import Dict, Optional, Callable
 
 from mcp.server.fastmcp import FastMCP
@@ -21,7 +23,9 @@ DEFAULT_SPEECH_STATE = {
     "listening": False,
     "speaking": False,
     "last_transcript": "",
-    "last_response": ""
+    "last_response": "",
+    "ui_active": False,
+    "ui_process_id": None
 }
 
 # Set up logging
@@ -53,6 +57,29 @@ def save_speech_state(state):
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(state, f)
+        
+        # Create or update response file for UI communication
+        # This helps ensure the UI is properly notified of state changes
+        RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
+        if state.get("speaking", False):
+            # If speaking, write the response to the file for the UI to pick up
+            with open(RESPONSE_FILE, 'w') as f:
+                f.write(state.get("last_response", ""))
+        
+        # Create a special command file to signal state changes to the UI
+        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
+        command = ""
+        if state.get("listening", False):
+            command = "LISTEN"
+        elif state.get("speaking", False):
+            command = "SPEAK"
+        else:
+            command = "IDLE"
+        
+        with open(COMMAND_FILE, 'w') as f:
+            f.write(command)
+        
+        logger.debug(f"Saved state and sent UI command: {command}")
     except Exception as e:
         logger.error(f"Error saving speech state: {e}")
 
@@ -194,6 +221,56 @@ def initialize_tts():
             print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
             return False
 
+def ensure_ui_is_running():
+    """Ensure the UI process is running"""
+    global speech_state
+    
+    # Check if UI is already active
+    if speech_state.get("ui_active", False) and speech_state.get("ui_process_id"):
+        # Check if the process is actually running
+        try:
+            process_id = speech_state["ui_process_id"]
+            if psutil.pid_exists(process_id):
+                process = psutil.Process(process_id)
+                if process.status() != psutil.STATUS_ZOMBIE:
+                    logger.info(f"UI process already running with PID {process_id}")
+                    return True
+        except Exception as e:
+            logger.error(f"Error checking UI process: {e}")
+    
+    # Start a new UI process
+    logger.info("Starting UI process...")
+    print("Starting speech UI process...")
+    
+    try:
+        # Get the path to the UI module
+        ui_module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
+        
+        # Start the UI process
+        ui_process = subprocess.Popen(
+            [sys.executable, "-m", "speech_mcp.ui"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Update the speech state
+        speech_state["ui_active"] = True
+        speech_state["ui_process_id"] = ui_process.pid
+        save_speech_state(speech_state)
+        
+        logger.info(f"UI process started with PID {ui_process.pid}")
+        print(f"Speech UI started with PID {ui_process.pid}")
+        
+        # Give the UI a moment to initialize
+        time.sleep(1.0)
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error starting UI process: {e}")
+        print(f"ERROR: Failed to start speech UI: {e}")
+        return False
+
 def record_audio():
     """Record audio from the microphone and return the audio data"""
     global FORMAT
@@ -277,6 +354,11 @@ def record_audio():
             # Log amplitude periodically
             if len(audio_frames) % 20 == 0:
                 logger.debug(f"Current audio amplitude: {amplitude:.6f}")
+                
+                # Ensure UI state is still set to listening
+                if not speech_state.get("listening", False):
+                    speech_state["listening"] = True
+                    save_speech_state(speech_state)
             
             # Check for silence
             if amplitude < silence_threshold:
@@ -423,6 +505,18 @@ def speak_text(text):
         if hasattr(tts_engine, 'speak'):
             # Use the speak method directly (Kokoro adapter)
             tts_start = time.time()
+            
+            # Periodically update state during long speech to keep UI in sync
+            def update_speaking_state():
+                if speech_state.get("speaking", False):
+                    speech_state["speaking"] = True
+                    save_speech_state(speech_state)
+                    threading.Timer(0.5, update_speaking_state).start()
+            
+            # Start the update timer
+            update_speaking_state()
+            
+            # Speak the text
             tts_engine.speak(text)
             tts_duration = time.time() - tts_start
             logger.info(f"TTS completed in {tts_duration:.2f} seconds")
@@ -430,6 +524,18 @@ def speak_text(text):
         else:
             # Use pyttsx3 directly
             tts_start = time.time()
+            
+            # Periodically update state during long speech to keep UI in sync
+            def update_speaking_state():
+                if speech_state.get("speaking", False):
+                    speech_state["speaking"] = True
+                    save_speech_state(speech_state)
+                    threading.Timer(0.5, update_speaking_state).start()
+            
+            # Start the update timer
+            update_speaking_state()
+            
+            # Speak the text
             tts_engine.say(text)
             tts_engine.runAndWait()
             tts_duration = time.time() - tts_start
@@ -470,6 +576,9 @@ def listen_for_speech() -> str:
     logger.info("Starting to listen for speech input...")
     print("\nListening for speech input... Speak now.")
     
+    # Make sure the UI is running
+    ensure_ui_is_running()
+    
     try:
         # Record audio
         audio_file_path = record_audio()
@@ -501,6 +610,36 @@ def listen_for_speech() -> str:
             )
         )
 
+def cleanup_ui_process():
+    """Clean up the UI process when the server shuts down"""
+    global speech_state
+    
+    if speech_state.get("ui_active", False) and speech_state.get("ui_process_id"):
+        try:
+            process_id = speech_state["ui_process_id"]
+            if psutil.pid_exists(process_id):
+                logger.info(f"Terminating UI process with PID {process_id}")
+                process = psutil.Process(process_id)
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except psutil.TimeoutExpired:
+                    logger.warning(f"UI process {process_id} did not terminate, forcing kill")
+                    process.kill()
+            
+            # Update state
+            speech_state["ui_active"] = False
+            speech_state["ui_process_id"] = None
+            save_speech_state(speech_state)
+            
+            logger.info("UI process terminated")
+        except Exception as e:
+            logger.error(f"Error terminating UI process: {e}")
+
+# Register cleanup function to be called on exit
+import atexit
+atexit.register(cleanup_ui_process)
+
 @mcp.tool()
 def start_conversation() -> str:
     """
@@ -527,6 +666,9 @@ def start_conversation() -> str:
         logger.error("Failed to initialize speech recognition in start_conversation()")
         print("ERROR: Failed to initialize speech recognition in start_conversation()")
         return "ERROR: Failed to initialize speech recognition."
+    
+    # Ensure the UI is running
+    ensure_ui_is_running()
     
     # Start listening
     try:
@@ -620,6 +762,9 @@ def reply(text: str) -> str:
         logger.error(f"Error speaking text in reply(): {e}", exc_info=True)
         print(f"ERROR: Error speaking text in reply(): {e}")
         return f"ERROR: Failed to speak text: {str(e)}"
+    
+    # Ensure the UI is running
+    ensure_ui_is_running()
     
     # Start listening for response
     try:
@@ -732,6 +877,10 @@ def usage_guide() -> str:
     ## Tips
     
     - For best results, use a quiet environment and speak clearly
+    - The system automatically launches a visual UI when you start a conversation
+      - The UI shows when the microphone is active and listening
+      - A blue pulsing circle indicates active listening
+      - A green circle indicates the system is speaking
     - The system automatically detects silence to know when you've finished speaking
       - Silence detection waits for 5 seconds of quiet before stopping recording
       - This allows for natural pauses in speech without cutting off

@@ -2,7 +2,9 @@ import argparse
 import logging
 import sys
 import os
-from .server import mcp
+import signal
+import atexit
+from .server import mcp, cleanup_ui_process
 
 # Set up logging to both console and file
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'speech-mcp.log')
@@ -14,6 +16,18 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+
+# Ensure UI process is cleaned up on exit
+atexit.register(cleanup_ui_process)
+
+# Handle signals to ensure clean shutdown
+def signal_handler(sig, frame):
+    logging.info(f"Received signal {sig}, shutting down...")
+    cleanup_ui_process()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     """Speech MCP: Voice interaction with speech recognition."""
