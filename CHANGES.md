@@ -2,6 +2,16 @@
 
 ## Latest Changes
 
+### 7. Kokoro TTS Integration
+- Added support for Kokoro TTS, a high-quality neural text-to-speech engine
+- Created a modular TTS adapter system to support multiple TTS engines
+- Added a Kokoro adapter that falls back to pyttsx3 if Kokoro is not available
+- Added pip optional dependencies for easy installation: `pip install speech-mcp[kokoro]`
+- Added an installation script for Kokoro and its dependencies
+- Updated documentation with information about Kokoro TTS
+- Enhanced the UI to use Kokoro when available
+- Added support for multiple voice styles and languages
+
 ### 6. Freezing and State Management Issues
 - Fixed issue where `start_conversation()` would freeze indefinitely
 - Added file system permission testing to verify transcription file can be created
@@ -59,17 +69,22 @@
    uv pip install -e .
    ```
 
-2. Run the speech-mcp server:
+2. (Optional) Install Kokoro TTS:
+   ```
+   python scripts/install_kokoro.py
+   ```
+
+3. Run the speech-mcp server:
    ```
    speech-mcp
    ```
 
-3. Start a conversation:
+4. Start a conversation:
    ```
    user_input = start_conversation()
    ```
 
-4. Reply to the user and get their response:
+5. Reply to the user and get their response:
    ```
    user_response = reply("This is a test of the speech synthesis system")
    ```

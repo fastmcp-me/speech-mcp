@@ -2,7 +2,7 @@
   "project": {
     "name": "speech-mcp",
     "description": "Speech MCP extension for Goose that provides voice interaction with audio visualization",
-    "version": "0.2.0",
+    "version": "0.3.1",
     "type": "goose_extension",
     "python_min_version": "3.10"
   },
@@ -19,6 +19,12 @@
         "path": "src/speech_mcp/ui/__init__.py",
         "description": "Speech UI implementation with audio processing and visualization",
         "responsibilities": ["Audio recording", "Speech recognition", "Text-to-speech", "UI display"]
+      },
+      {
+        "name": "tts_adapters",
+        "path": "src/speech_mcp/tts_adapters/",
+        "description": "Text-to-speech adapters for different TTS engines",
+        "responsibilities": ["Provide unified TTS interface", "Support multiple TTS engines", "Handle fallbacks"]
       }
     ],
     "entry_points": [
@@ -65,6 +71,10 @@
       {
         "uri": "mcp://speech/usage_guide",
         "description": "Usage guide for the Speech MCP extension"
+      },
+      {
+        "uri": "mcp://speech/kokoro_tts_adapter",
+        "description": "Documentation for the Kokoro TTS adapter"
       }
     ]
   },
@@ -77,15 +87,29 @@
       "pydub>=0.25.1",
       "faster-whisper>=0.10.0",
       "numba>=0.57.0",
-      "pyttsx3>=2.90"
+      "pyttsx3>=2.90",
+      "psutil>=5.9.0"
     ],
+    "optional": {
+      "kokoro": [
+        "kokoro>=0.8.4",
+        "soundfile",
+        "torch",
+        "misaki[en]"
+      ],
+      "ja": ["misaki[ja]"],
+      "zh": ["misaki[zh]"]
+    },
     "key_components": {
       "speech_recognition": {
         "primary": "faster-whisper",
         "fallback": "SpeechRecognition"
       },
       "audio_processing": ["pyaudio", "numpy", "pydub"],
-      "text_to_speech": "pyttsx3"
+      "text_to_speech": {
+        "primary": "kokoro",
+        "fallback": "pyttsx3"
+      }
     }
   },
   "files": {
@@ -141,7 +165,31 @@
       }
     ]
   },
+  "tts": {
+    "engines": [
+      {
+        "name": "Kokoro",
+        "priority": 1,
+        "description": "Primary TTS engine with high-quality voice synthesis",
+        "voices": [
+          "af_heart", "af_chill", "af_robot", "af_bright", "af_serious",
+          "am_casual", "am_calm", "am_serious", "am_happy"
+        ],
+        "languages": ["English"],
+        "optional_languages": ["Japanese", "Chinese"],
+        "installation": "pip install speech-mcp[kokoro]"
+      },
+      {
+        "name": "pyttsx3",
+        "priority": 2,
+        "description": "Fallback TTS engine using system voices",
+        "installation": "Included by default"
+      }
+    ]
+  },
   "recent_fixes": {
+    "kokoro_tts": "Added Kokoro as primary TTS engine with fallback to pyttsx3",
+    "tts_adapters": "Created modular TTS adapter system for multiple engines",
     "listen_timeout": "Increased timeout from 60s to 10min, reduced silence threshold",
     "speech_synthesis": "Added pyttsx3 for text-to-speech with fallback to simulation",
     "ui_startup": "Enhanced error handling, improved process management, fixed path issues",
@@ -166,7 +214,13 @@
         "name": "manual",
         "steps": ["Clone repository", "pip install -e ."]
       }
-    ]
+    ],
+    "kokoro": {
+      "basic": "pip install speech-mcp[kokoro]",
+      "with_japanese": "pip install speech-mcp[kokoro,ja]",
+      "with_chinese": "pip install speech-mcp[kokoro,zh]",
+      "all_languages": "pip install speech-mcp[all]"
+    }
   },
   "troubleshooting": {
     "log_locations": [
@@ -189,6 +243,16 @@
         "issue": "Speech recognition failing",
         "check": "Check if faster-whisper model is downloaded",
         "solution": "First run may take time to download the model"
+      },
+      {
+        "issue": "Kokoro TTS not working",
+        "check": "Check if Kokoro is installed with 'pip list | grep kokoro'",
+        "solution": "Install Kokoro with 'pip install speech-mcp[kokoro]'"
+      },
+      {
+        "issue": "TTS falling back to pyttsx3",
+        "check": "Check logs for Kokoro initialization errors",
+        "solution": "Ensure all Kokoro dependencies are installed properly"
       }
     ]
   }

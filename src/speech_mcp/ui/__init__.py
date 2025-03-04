@@ -70,26 +70,83 @@ def play_audio_file(file_path):
         logger.error(f"Error playing audio notification: {e}")
 
 # For text-to-speech
+# Always prioritize Kokoro as the primary TTS engine if available
 try:
-    import pyttsx3
-    tts_engine = pyttsx3.init()
-    tts_available = True
-    logger.info("Text-to-speech engine initialized successfully")
-    print("Text-to-speech engine initialized successfully!")
+    print("Initializing Kokoro as primary TTS engine...")
+    logger.info("Initializing Kokoro as primary TTS engine")
     
-    # Log available voices
-    voices = tts_engine.getProperty('voices')
-    logger.debug(f"Available TTS voices: {len(voices)}")
-    for i, voice in enumerate(voices):
-        logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+    # Import and initialize Kokoro adapter
+    try:
+        from speech_mcp.tts_adapters.kokoro_adapter import KokoroTTS
+        
+        # Initialize with Kokoro voice settings
+        tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+        tts_available = True
+        logger.info("Kokoro TTS adapter initialized successfully as primary TTS engine")
+        print("Kokoro TTS adapter initialized successfully as primary TTS engine!")
+        
+        # Log available voices
+        voices = tts_engine.get_available_voices()
+        logger.debug(f"Available Kokoro TTS voices: {len(voices)}")
+        for i, voice in enumerate(voices):
+            logger.debug(f"Voice {i}: {voice}")
+        print(f"Available Kokoro voices: {', '.join(voices[:5])}{' and more...' if len(voices) > 5 else ''}")
+    except ImportError as e:
+        # If the adapter is available but Kokoro itself is not installed
+        logger.warning(f"Kokoro package not available: {e}. Falling back to pyttsx3.")
+        print("WARNING: Kokoro package not available. Falling back to pyttsx3.")
+        raise ImportError("Kokoro package not installed")
+    
 except ImportError as e:
-    logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
-    print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
-    tts_available = False
+    logger.warning(f"Kokoro adapter not available: {e}. Falling back to pyttsx3.")
+    print("WARNING: Kokoro adapter not available. Falling back to pyttsx3.")
+    
+    # Fall back to pyttsx3
+    try:
+        import pyttsx3
+        tts_engine = pyttsx3.init()
+        tts_available = True
+        logger.info("pyttsx3 text-to-speech engine initialized as fallback")
+        print("pyttsx3 text-to-speech engine initialized as fallback!")
+        
+        # Log available voices
+        voices = tts_engine.getProperty('voices')
+        logger.debug(f"Available pyttsx3 voices: {len(voices)}")
+        for i, voice in enumerate(voices):
+            logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+    except ImportError as e:
+        logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
+        print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
+        tts_available = False
+    except Exception as e:
+        logger.error(f"Error initializing text-to-speech engine: {e}")
+        print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
+        tts_available = False
 except Exception as e:
-    logger.error(f"Error initializing text-to-speech engine: {e}")
-    print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
-    tts_available = False
+    logger.error(f"Error initializing Kokoro TTS adapter: {e}")
+    print(f"WARNING: Error initializing Kokoro TTS adapter: {e}. Falling back to pyttsx3.")
+    
+    # Fall back to pyttsx3
+    try:
+        import pyttsx3
+        tts_engine = pyttsx3.init()
+        tts_available = True
+        logger.info("pyttsx3 text-to-speech engine initialized as fallback")
+        print("pyttsx3 text-to-speech engine initialized as fallback!")
+        
+        # Log available voices
+        voices = tts_engine.getProperty('voices')
+        logger.debug(f"Available pyttsx3 voices: {len(voices)}")
+        for i, voice in enumerate(voices):
+            logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+    except ImportError as e:
+        logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
+        print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
+        tts_available = False
+    except Exception as e:
+        logger.error(f"Error initializing text-to-speech engine: {e}")
+        print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
+        tts_available = False
 
 # These will be imported later when needed
 whisper_loaded = False
@@ -99,6 +156,7 @@ speech_recognition_loaded = False
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_state.json")
 TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "transcription.txt")
 RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "response.txt")
+COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ui_command.txt")
 
 # Audio parameters
 CHUNK = 1024
@@ -156,6 +214,14 @@ class SimpleSpeechProcessorUI:
         self.last_response = ""
         self.should_update = True
         self.stream = None
+        
+        # Create initial command file to indicate UI is ready
+        try:
+            with open(COMMAND_FILE, 'w') as f:
+                f.write("UI_READY")
+            logger.info("Created initial UI_READY command file")
+        except Exception as e:
+            logger.error(f"Error creating initial command file: {e}")
         
         # Audio visualization parameters
         self.waveform_data = []
@@ -220,9 +286,6 @@ class SimpleSpeechProcessorUI:
                 text=f"Audio Error: {str(e)[:30]}..."
             ))
         
-        # Load speech state
-        self.load_speech_state()
-        
         # Create the UI components
         # Main frame
         self.main_frame = tk.Frame(self.root)
@@ -249,6 +312,9 @@ class SimpleSpeechProcessorUI:
         )
         self.waveform_canvas.pack(expand=True, fill="both", padx=5, pady=5)
         
+        # Load speech state
+        self.load_speech_state()
+        
         # Load whisper in a background thread
         print("Checking for speech recognition module...")
         threading.Thread(target=self.initialize_speech_recognition, daemon=True).start()
@@ -266,8 +332,15 @@ class SimpleSpeechProcessorUI:
         # Handle window close event
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         
+        # Initialize UI to a proper state
+        self.root.after(100, self.update_ui_from_state)
+        
         print("Speech processor initialization complete!")
         logger.info("Speech processor initialized successfully")
+        self.status_label.config(text="Ready")
+        
+        # Update the waveform to show the initial state
+        self.root.after(200, self.update_waveform)
     
     def initialize_speech_recognition(self):
         """Initialize speech recognition in a background thread"""
@@ -350,6 +423,9 @@ class SimpleSpeechProcessorUI:
             self.status_label.config(text="Listening...")
             # Start visualization if not already running
             self.root.after(0, self.update_waveform)
+            # Start listening if not already started
+            if not hasattr(self, 'stream') or self.stream is None:
+                self.root.after(0, self.start_listening)
         elif self.speaking:
             self.status_label.config(text="Speaking...")
             # Start visualization for speaking
@@ -358,6 +434,12 @@ class SimpleSpeechProcessorUI:
             self.status_label.config(text="Ready")
             # Update visualization to show idle state
             self.root.after(0, self.update_waveform)
+            # Stop listening if still active
+            if hasattr(self, 'stream') and self.stream is not None:
+                self.root.after(0, self.stop_listening)
+        
+        # Always schedule another waveform update to ensure the UI stays responsive
+        self.root.after(self.waveform_update_interval * 2, self.update_waveform)
     
     def update_waveform(self):
         """Update the circular audio visualization on the canvas"""
@@ -680,11 +762,11 @@ class SimpleSpeechProcessorUI:
             logger.info("Starting silence detection")
             time.sleep(0.5)
             
-            # Adjusted silence detection parameters based on debug tool findings
-            silence_threshold = 0.01  # Increased based on debug tool mean amplitude of ~0.026
+            # Adjusted silence detection parameters for longer pauses
+            silence_threshold = 0.008  # Reduced threshold to be more sensitive to quiet speech (was 0.01)
             silence_duration = 0
-            max_silence = 3.0  # Increased to give more time for natural pauses
-            check_interval = 0.2  # Increased to reduce CPU usage and allow for smoother detection
+            max_silence = 5.0  # Increased from 1.5s to 5.0s to allow for longer thinking pauses
+            check_interval = 0.1  # Check every 100ms
             
             logger.debug(f"Silence detection parameters: threshold={silence_threshold}, max_silence={max_silence}s, check_interval={check_interval}s")
             
@@ -868,133 +950,205 @@ class SimpleSpeechProcessorUI:
             self.update_ui_from_state()
     
     def check_for_updates(self):
-        """Periodically check for updates to the speech state file"""
-        last_modified = 0
+        """Periodically check for updates to the speech state file and command file"""
+        last_modified_state = 0
+        last_modified_command = 0
+        
         if os.path.exists(STATE_FILE):
-            last_modified = os.path.getmtime(STATE_FILE)
+            last_modified_state = os.path.getmtime(STATE_FILE)
         
         while self.should_update:
             try:
+                # Check for command file first (higher priority)
+                if os.path.exists(COMMAND_FILE):
+                    current_modified = os.path.getmtime(COMMAND_FILE)
+                    if current_modified > last_modified_command:
+                        last_modified_command = current_modified
+                        
+                        # Read the command
+                        try:
+                            with open(COMMAND_FILE, 'r') as f:
+                                command = f.read().strip()
+                            
+                            logger.debug(f"Received UI command: {command}")
+                            
+                            # Process the command
+                            if command == "LISTEN":
+                                if not self.listening:
+                                    self.listening = True
+                                    self.speaking = False
+                                    self.root.after(0, self.start_listening)
+                                    self.root.after(0, self.update_ui_from_state)
+                            elif command == "SPEAK":
+                                if not self.speaking:
+                                    self.listening = False
+                                    self.speaking = True
+                                    self.root.after(0, self.update_ui_from_state)
+                            elif command == "IDLE":
+                                self.listening = False
+                                self.speaking = False
+                                self.root.after(0, self.update_ui_from_state)
+                        except Exception as e:
+                            logger.error(f"Error processing command: {e}")
+                
+                # Also check state file for other updates
                 if os.path.exists(STATE_FILE):
                     current_modified = os.path.getmtime(STATE_FILE)
-                    if current_modified > last_modified:
-                        last_modified = current_modified
+                    if current_modified > last_modified_state:
+                        last_modified_state = current_modified
                         self.load_speech_state()
                         self.root.after(0, self.update_ui_from_state)
             except Exception as e:
                 logger.error(f"Error checking for updates: {e}")
             
-            time.sleep(0.5)  # Check every half second
+            time.sleep(0.1)  # Check every 100ms for faster response
     
     def check_for_responses(self):
         """Periodically check for new responses to speak"""
+        # Add a lock to prevent multiple TTS instances from running simultaneously
+        self.tts_lock = threading.Lock()
+        
         while self.should_update:
             try:
                 if os.path.exists(RESPONSE_FILE):
-                    # Read the response
-                    logger.debug(f"Found response file: {RESPONSE_FILE}")
-                    try:
-                        with open(RESPONSE_FILE, 'r') as f:
-                            response = f.read().strip()
-                        
-                        logger.debug(f"Read response text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
-                    except Exception as e:
-                        logger.error(f"Error reading response file: {e}", exc_info=True)
-                        time.sleep(0.5)
-                        continue
-                    
-                    # Delete the file
-                    try:
-                        logger.debug("Removing response file")
-                        os.remove(RESPONSE_FILE)
-                    except Exception as e:
-                        logger.warning(f"Error removing response file: {e}")
-                    
-                    # Process the response
-                    if response:
-                        self.last_response = response
-                        self.speaking = True
-                        self.save_speech_state()
-                        self.root.after(0, self.update_ui_from_state)
-                        
-                        # Create a simple speaking animation
-                        def animate_speaking():
-                            if not self.speaking:
-                                return
-                                
-                            # Generate a random amplitude for speaking animation
-                            # Use a sine wave with noise for more natural movement
-                            import time
-                            time_val = time.time() * 3  # Speed factor
-                            base_amplitude = 0.1 + 0.1 * np.sin(time_val)
-                            noise = 0.05 * np.random.random()
-                            amplitude = base_amplitude + noise
-                            
-                            # Add to waveform data
-                            self.waveform_data.append(amplitude)
-                            
-                            # Keep only the most recent points
-                            if len(self.waveform_data) > self.waveform_max_points:
-                                self.waveform_data = self.waveform_data[-self.waveform_max_points:]
-                            
-                            # Update the visualization
-                            self.update_waveform()
-                            
-                            # Schedule the next animation frame if still speaking
-                            if self.speaking:
-                                self.root.after(50, animate_speaking)
-                        
-                        # Start the speaking animation
-                        self.root.after(0, animate_speaking)
-                        
-                        logger.info(f"Speaking text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
-                        print(f"Speaking: \"{response}\"")
-                        
-                        # Use actual text-to-speech if available
-                        if tts_available:
+                    # Only proceed if we're not already speaking
+                    if not self.speaking and self.tts_lock.acquire(blocking=False):
+                        try:
+                            # Read the response
+                            logger.debug(f"Found response file: {RESPONSE_FILE}")
                             try:
-                                # Use pyttsx3 for actual speech
-                                logger.debug("Using pyttsx3 for text-to-speech")
+                                with open(RESPONSE_FILE, 'r') as f:
+                                    response = f.read().strip()
                                 
-                                # Log TTS settings
-                                rate = tts_engine.getProperty('rate')
-                                volume = tts_engine.getProperty('volume')
-                                voice = tts_engine.getProperty('voice')
-                                logger.debug(f"TTS settings - Rate: {rate}, Volume: {volume}, Voice: {voice}")
-                                
-                                # Speak the text
-                                tts_start = time.time()
-                                tts_engine.say(response)
-                                tts_engine.runAndWait()
-                                tts_duration = time.time() - tts_start
-                                
-                                logger.info(f"Speech completed in {tts_duration:.2f} seconds")
-                                print("Speech completed.")
+                                logger.debug(f"Read response text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
                             except Exception as e:
-                                logger.error(f"Error using text-to-speech: {e}", exc_info=True)
-                                print(f"Error using text-to-speech: {e}")
-                                # Fall back to simulated speech
-                                logger.info("Falling back to simulated speech")
-                                speaking_duration = len(response) * 0.05  # 50ms per character
-                                time.sleep(speaking_duration)
-                        else:
-                            # Simulate speaking time if TTS not available
-                            logger.debug("TTS not available, simulating speech timing")
-                            speaking_duration = len(response) * 0.05  # 50ms per character
-                            logger.debug(f"Simulating speech for {speaking_duration:.2f} seconds")
-                            time.sleep(speaking_duration)
-                        
-                        # Update state when done speaking
-                        self.speaking = False
-                        self.waveform_data = []  # Clear waveform data
-                        self.save_speech_state()
-                        self.root.after(0, self.update_ui_from_state)
-                        print("Done speaking.")
-                        logger.info("Done speaking")
+                                logger.error(f"Error reading response file: {e}", exc_info=True)
+                                self.tts_lock.release()
+                                time.sleep(0.5)
+                                continue
+                            
+                            # Delete the file immediately to prevent duplicate processing
+                            try:
+                                logger.debug("Removing response file")
+                                os.remove(RESPONSE_FILE)
+                            except Exception as e:
+                                logger.warning(f"Error removing response file: {e}")
+                            
+                            # Process the response
+                            if response:
+                                self.last_response = response
+                                self.speaking = True
+                                self.save_speech_state()
+                                self.root.after(0, self.update_ui_from_state)
+                                
+                                # Create a simple speaking animation
+                                def animate_speaking():
+                                    if not self.speaking:
+                                        return
+                                        
+                                    # Generate a random amplitude for speaking animation
+                                    # Use a sine wave with noise for more natural movement
+                                    import time
+                                    time_val = time.time() * 3  # Speed factor
+                                    base_amplitude = 0.1 + 0.1 * np.sin(time_val)
+                                    noise = 0.05 * np.random.random()
+                                    amplitude = base_amplitude + noise
+                                    
+                                    # Add to waveform data
+                                    self.waveform_data.append(amplitude)
+                                    
+                                    # Keep only the most recent points
+                                    if len(self.waveform_data) > self.waveform_max_points:
+                                        self.waveform_data = self.waveform_data[-self.waveform_max_points:]
+                                    
+                                    # Update the visualization
+                                    self.update_waveform()
+                                    
+                                    # Schedule the next animation frame if still speaking
+                                    if self.speaking:
+                                        self.root.after(50, animate_speaking)
+                                
+                                # Start the speaking animation
+                                self.root.after(0, animate_speaking)
+                                
+                                logger.info(f"Speaking text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
+                                print(f"Speaking: \"{response}\"")
+                                
+                                # Use actual text-to-speech if available
+                                if tts_available:
+                                    try:
+                                        logger.debug("Using TTS engine for text-to-speech")
+                                        
+                                        # If we're using our Kokoro adapter
+                                        if hasattr(tts_engine, 'speak'):
+                                            # Use the speak method directly
+                                            tts_start = time.time()
+                                            tts_engine.speak(response)
+                                            tts_duration = time.time() - tts_start
+                                            logger.info(f"Kokoro TTS completed in {tts_duration:.2f} seconds")
+                                            print("Speech completed.")
+                                        else:
+                                            # Use pyttsx3 directly
+                                            # Log TTS settings
+                                            rate = tts_engine.getProperty('rate')
+                                            volume = tts_engine.getProperty('volume')
+                                            voice = tts_engine.getProperty('voice')
+                                            logger.debug(f"TTS settings - Rate: {rate}, Volume: {volume}, Voice: {voice}")
+
+                                            # Speak the text
+                                            tts_start = time.time()
+                                            tts_engine.say(response)
+                                            tts_engine.runAndWait()
+                                            tts_duration = time.time() - tts_start
+                                            
+                                            logger.info(f"Speech completed in {tts_duration:.2f} seconds")
+                                            print("Speech completed.")
+                                    except Exception as e:
+                                        logger.error(f"Error using text-to-speech: {e}", exc_info=True)
+                                        print(f"Error using text-to-speech: {e}")
+                                        # Fall back to simulated speech
+                                        logger.info("Falling back to simulated speech")
+                                        speaking_duration = len(response) * 0.05  # 50ms per character
+                                        time.sleep(speaking_duration)
+                                else:
+                                    # Simulate speaking time if TTS not available
+                                    logger.debug("TTS not available, simulating speech timing")
+                                    speaking_duration = len(response) * 0.05  # 50ms per character
+                                    logger.debug(f"Simulating speech for {speaking_duration:.2f} seconds")
+                                    time.sleep(speaking_duration)
+                                
+                                # Update state when done speaking
+                                self.speaking = False
+                                self.waveform_data = []  # Clear waveform data
+                                self.save_speech_state()
+                                self.root.after(0, self.update_ui_from_state)
+                                print("Done speaking.")
+                                logger.info("Done speaking")
+                                
+                                # Release the lock when done
+                                self.tts_lock.release()
+                        except Exception as e:
+                            logger.error(f"Error processing response: {e}", exc_info=True)
+                            # Make sure we release the lock on error
+                            self.speaking = False
+                            self.save_speech_state()
+                            try:
+                                self.tts_lock.release()
+                            except RuntimeError:
+                                pass  # Ignore if lock wasn't acquired
             except Exception as e:
                 logger.error(f"Error checking for responses: {e}", exc_info=True)
+                # Make sure we're not stuck in speaking state
+                if self.speaking:
+                    self.speaking = False
+                    self.save_speech_state()
+                # Try to release the lock if we might have it
+                try:
+                    self.tts_lock.release()
+                except RuntimeError:
+                    pass  # Ignore if lock wasn't acquired
             
-            time.sleep(0.5)  # Check every half second
+            time.sleep(0.1)  # Check every 100ms for faster response
     
     def on_close(self):
         """Handle window close event"""
@@ -1025,6 +1179,23 @@ class SimpleSpeechProcessorUI:
             self.speaking = False
             self.save_speech_state()
             
+            # Write a UI_CLOSED command to the command file
+            try:
+                with open(COMMAND_FILE, 'w') as f:
+                    f.write("UI_CLOSED")
+                logger.info("Created UI_CLOSED command file")
+            except Exception as e:
+                logger.error(f"Error creating command file: {e}")
+            
+            # Remove the lock file
+            try:
+                lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_ui.lock")
+                if os.path.exists(lock_file):
+                    os.remove(lock_file)
+                    logger.info("Removed lock file")
+            except Exception as e:
+                logger.error(f"Error removing lock file: {e}")
+            
             print("Speech processor shut down successfully.")
             logger.info("Speech processor shut down successfully")
             
@@ -1047,6 +1218,43 @@ def main():
         logger.info(f"Platform: {platform.platform()}")
         logger.info(f"Python version: {platform.python_version()}")
         
+        # Check if another instance is already running
+        import psutil
+        import os
+        
+        # Create a lock file to prevent multiple instances
+        lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_ui.lock")
+        
+        # Check if the lock file exists and if the process is still running
+        if os.path.exists(lock_file):
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = int(f.read().strip())
+                
+                if psutil.pid_exists(pid):
+                    # Check if it's actually our UI process
+                    try:
+                        process = psutil.Process(pid)
+                        cmdline = process.cmdline()
+                        if len(cmdline) >= 3 and 'speech_mcp.ui' in ' '.join(cmdline):
+                            logger.warning(f"Another UI instance is already running with PID {pid}")
+                            print(f"WARNING: Another Speech UI instance is already running with PID {pid}")
+                            print("Only one instance of Speech UI can run at a time.")
+                            return
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        # Process doesn't exist or can't be accessed, ignore the lock file
+                        pass
+            except Exception as e:
+                logger.error(f"Error checking lock file: {e}")
+        
+        # Create a new lock file with our PID
+        try:
+            with open(lock_file, 'w') as f:
+                f.write(str(os.getpid()))
+            logger.info(f"Created lock file with PID {os.getpid()}")
+        except Exception as e:
+            logger.error(f"Error creating lock file: {e}")
+        
         # Log audio-related environment variables
         audio_env_vars = {k: v for k, v in os.environ.items() if 'AUDIO' in k.upper() or 'PULSE' in k.upper() or 'ALSA' in k.upper()}
         if audio_env_vars:
@@ -1058,6 +1266,15 @@ def main():
         logger.info("Starting Tkinter main loop")
         root.mainloop()
         logger.info("Tkinter main loop exited")
+        
+        # Clean up the lock file when we exit
+        try:
+            if os.path.exists(lock_file):
+                os.remove(lock_file)
+                logger.info("Removed lock file")
+        except Exception as e:
+            logger.error(f"Error removing lock file: {e}")
+            
     except Exception as e:
         logger.error(f"Error in speech processor main: {e}", exc_info=True)
         print(f"\nERROR: Failed to start speech processor: {e}")
