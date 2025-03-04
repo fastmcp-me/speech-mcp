@@ -143,8 +143,8 @@ class SimpleSpeechProcessorUI:
     """A speech processor UI that shows status and audio waveform visualization"""
     def __init__(self, root):
         self.root = root
-        self.root.title("Speech MCP")
-        self.root.geometry("600x300")  # Increased size to accommodate waveform
+        self.root.title("Speech MCP - Voice Interface")
+        self.root.geometry("500x500")  # Square shape for better circular visualization
         
         # Initialize basic components
         print("Initializing speech processor...")
@@ -348,40 +348,20 @@ class SimpleSpeechProcessorUI:
         """Update the UI to reflect the current speech state"""
         if self.listening:
             self.status_label.config(text="Listening...")
-            # Start waveform visualization if not already running
+            # Start visualization if not already running
             self.root.after(0, self.update_waveform)
         elif self.speaking:
             self.status_label.config(text="Speaking...")
+            # Start visualization for speaking
+            self.root.after(0, self.update_waveform)
         else:
             self.status_label.config(text="Ready")
-            # Clear waveform when not listening
-            self.waveform_canvas.delete("all")
-            canvas_width = self.waveform_canvas.winfo_width()
-            canvas_height = self.waveform_canvas.winfo_height()
-            if canvas_width > 1 and canvas_height > 1:
-                self.waveform_canvas.create_line(
-                    0, canvas_height // 2, 
-                    canvas_width, canvas_height // 2, 
-                    fill="#cccccc", width=1
-                )
+            # Update visualization to show idle state
+            self.root.after(0, self.update_waveform)
     
     def update_waveform(self):
-        """Update the waveform visualization on the canvas"""
+        """Update the circular audio visualization on the canvas"""
         try:
-            if not self.listening or not hasattr(self, 'waveform_data') or len(self.waveform_data) == 0:
-                # Clear the canvas if not listening or no data
-                self.waveform_canvas.delete("all")
-                # Draw a horizontal line in the middle
-                canvas_width = self.waveform_canvas.winfo_width()
-                canvas_height = self.waveform_canvas.winfo_height()
-                if canvas_width > 1 and canvas_height > 1:  # Make sure canvas is visible
-                    self.waveform_canvas.create_line(
-                        0, canvas_height // 2, 
-                        canvas_width, canvas_height // 2, 
-                        fill="#cccccc", width=1
-                    )
-                return
-            
             # Get canvas dimensions
             canvas_width = self.waveform_canvas.winfo_width()
             canvas_height = self.waveform_canvas.winfo_height()
@@ -394,58 +374,163 @@ class SimpleSpeechProcessorUI:
             # Clear the canvas
             self.waveform_canvas.delete("all")
             
-            # Draw the waveform
-            if len(self.waveform_data) > 1:
-                # Calculate the x-step between points
-                x_step = canvas_width / (len(self.waveform_data) - 1)
-                
-                # Create line segments for the waveform
-                points = []
-                for i, amplitude in enumerate(self.waveform_data):
-                    x = i * x_step
-                    # Scale amplitude to fit canvas height (0.5 amplitude = full height)
-                    y = canvas_height // 2 - (amplitude * canvas_height)
-                    points.append(x)
-                    points.append(y)
-                
-                # Draw the waveform line
-                if len(points) >= 4:  # Need at least 2 points (4 coordinates)
-                    self.waveform_canvas.create_line(
-                        points, 
-                        fill="#4287f5",  # Blue color
-                        width=2,
-                        smooth=True  # Smooth the line
-                    )
-                
-                # Draw the mirrored waveform (bottom half)
-                mirror_points = []
-                for i, amplitude in enumerate(self.waveform_data):
-                    x = i * x_step
-                    # Mirror the amplitude
-                    y = canvas_height // 2 + (amplitude * canvas_height)
-                    mirror_points.append(x)
-                    mirror_points.append(y)
-                
-                if len(mirror_points) >= 4:
-                    self.waveform_canvas.create_line(
-                        mirror_points, 
-                        fill="#4287f5", 
-                        width=2,
-                        smooth=True
-                    )
+            # Calculate center point
+            center_x = canvas_width / 2
+            center_y = canvas_height / 2
             
-            # Draw a horizontal line in the middle
-            self.waveform_canvas.create_line(
-                0, canvas_height // 2, 
-                canvas_width, canvas_height // 2, 
-                fill="#cccccc", width=1
+            # Draw background circle
+            background_radius = min(canvas_width, canvas_height) * 0.4
+            self.waveform_canvas.create_oval(
+                center_x - background_radius, center_y - background_radius,
+                center_x + background_radius, center_y + background_radius,
+                outline="#e0e0e0", width=2, fill="#f8f8f8"
             )
             
-            # Schedule the next update
-            if self.listening:
+            if self.listening or self.speaking:
+                # Get current amplitude
+                current_amplitude = 0
+                if hasattr(self, 'waveform_data') and len(self.waveform_data) > 0:
+                    # Use the most recent amplitude value
+                    current_amplitude = self.waveform_data[-1]
+                
+                # Calculate radius based on amplitude
+                # Scale the amplitude (typically 0-0.5) to a reasonable range
+                # Base radius is 30% of the background circle, max is 90%
+                min_radius = background_radius * 0.3
+                max_radius = background_radius * 0.9
+                
+                # Scale amplitude (typically 0-0.5) to radius range
+                radius = min_radius + (current_amplitude * (max_radius - min_radius) * 4)
+                
+                # Ensure radius stays within bounds
+                radius = max(min_radius, min(radius, max_radius))
+                
+                # Draw the amplitude circle
+                fill_color = "#4287f5" if self.listening else "#42f587"  # Blue for listening, green for speaking
+                self.waveform_canvas.create_oval(
+                    center_x - radius, center_y - radius,
+                    center_x + radius, center_y + radius,
+                    outline="", fill=fill_color
+                )
+                
+                # Draw inner circle (white)
+                inner_radius = min_radius * 0.8
+                self.waveform_canvas.create_oval(
+                    center_x - inner_radius, center_y - inner_radius,
+                    center_x + inner_radius, center_y + inner_radius,
+                    outline="", fill="white"
+                )
+                
+                # Add icon based on state
+                if self.listening:
+                    # Draw microphone icon (simple representation)
+                    mic_width = inner_radius * 0.6
+                    mic_height = inner_radius * 1.2
+                    
+                    # Microphone body
+                    self.waveform_canvas.create_rectangle(
+                        center_x - mic_width/2, center_y - mic_height/2,
+                        center_x + mic_width/2, center_y + mic_height/4,
+                        fill="#555555", outline=""
+                    )
+                    
+                    # Microphone top (rounded)
+                    self.waveform_canvas.create_oval(
+                        center_x - mic_width/2, center_y - mic_height/2 - mic_width/2,
+                        center_x + mic_width/2, center_y - mic_height/2 + mic_width/2,
+                        fill="#555555", outline=""
+                    )
+                    
+                    # Stand
+                    self.waveform_canvas.create_rectangle(
+                        center_x - mic_width/6, center_y + mic_height/4,
+                        center_x + mic_width/6, center_y + mic_height/2,
+                        fill="#555555", outline=""
+                    )
+                    
+                    # Base
+                    self.waveform_canvas.create_rectangle(
+                        center_x - mic_width/2, center_y + mic_height/2 - mic_width/6,
+                        center_x + mic_width/2, center_y + mic_height/2 + mic_width/6,
+                        fill="#555555", outline=""
+                    )
+                else:
+                    # Draw speaker icon for speaking
+                    speaker_size = inner_radius * 0.7
+                    
+                    # Speaker body
+                    self.waveform_canvas.create_rectangle(
+                        center_x - speaker_size/2, center_y - speaker_size/2,
+                        center_x - speaker_size/6, center_y + speaker_size/2,
+                        fill="#555555", outline=""
+                    )
+                    
+                    # Speaker cone
+                    points = [
+                        center_x - speaker_size/6, center_y - speaker_size/2,  # Top left
+                        center_x + speaker_size/2, center_y - speaker_size,    # Top right
+                        center_x + speaker_size/2, center_y + speaker_size,    # Bottom right
+                        center_x - speaker_size/6, center_y + speaker_size/2   # Bottom left
+                    ]
+                    self.waveform_canvas.create_polygon(points, fill="#555555", outline="")
+                    
+                    # Sound waves (3 arcs)
+                    for i in range(1, 4):
+                        arc_size = speaker_size * (0.5 + i * 0.25)
+                        self.waveform_canvas.create_arc(
+                            center_x, center_y - arc_size/2,
+                            center_x + arc_size, center_y + arc_size/2,
+                            start=300, extent=120,
+                            style="arc", outline="#555555", width=2
+                        )
+                
+                # Draw pulsing rings
+                if hasattr(self, 'pulse_count'):
+                    self.pulse_count += 1
+                    if self.pulse_count > 100:
+                        self.pulse_count = 0
+                else:
+                    self.pulse_count = 0
+                
+                # Create 3 pulsing rings
+                for i in range(3):
+                    pulse_phase = (self.pulse_count + i * 33) % 100
+                    if pulse_phase < 70:  # Only show rings during part of the cycle
+                        # Calculate ring size based on pulse phase
+                        ring_size = background_radius * (0.5 + pulse_phase / 70)
+                        # Calculate opacity based on pulse phase (fade out as it expands)
+                        opacity = int(255 * (1 - pulse_phase / 70))
+                        ring_color = f"#{opacity:02x}{opacity:02x}{opacity:02x}"
+                        
+                        self.waveform_canvas.create_oval(
+                            center_x - ring_size, center_y - ring_size,
+                            center_x + ring_size, center_y + ring_size,
+                            outline=ring_color, width=1, fill=""
+                        )
+            else:
+                # Draw a standby/ready icon in the center
+                ready_radius = background_radius * 0.3
+                self.waveform_canvas.create_oval(
+                    center_x - ready_radius, center_y - ready_radius,
+                    center_x + ready_radius, center_y + ready_radius,
+                    outline="#cccccc", width=2, fill="#f0f0f0"
+                )
+                
+                # Draw a simple "ready" symbol (play button)
+                triangle_size = ready_radius * 0.8
+                points = [
+                    center_x - triangle_size/2, center_y - triangle_size,
+                    center_x - triangle_size/2, center_y + triangle_size,
+                    center_x + triangle_size, center_y
+                ]
+                self.waveform_canvas.create_polygon(points, fill="#cccccc", outline="")
+            
+            # Schedule the next update if listening or speaking
+            if self.listening or self.speaking:
                 self.root.after(self.waveform_update_interval, self.update_waveform)
+            
         except Exception as e:
-            logger.error(f"Error updating waveform: {e}", exc_info=True)
+            logger.error(f"Error updating visualization: {e}", exc_info=True)
             # Try again after a delay
             self.root.after(self.waveform_update_interval * 2, self.update_waveform)
     
@@ -832,24 +917,32 @@ class SimpleSpeechProcessorUI:
                         self.save_speech_state()
                         self.root.after(0, self.update_ui_from_state)
                         
-                        # Create a simple speaking animation on the waveform
+                        # Create a simple speaking animation
                         def animate_speaking():
                             if not self.speaking:
                                 return
                                 
-                            # Generate some random waveform data to simulate speaking
-                            self.waveform_data = []
-                            for i in range(self.waveform_max_points):
-                                # Generate a random amplitude between 0.05 and 0.2
-                                amplitude = 0.05 + (np.random.random() * 0.15)
-                                self.waveform_data.append(amplitude)
+                            # Generate a random amplitude for speaking animation
+                            # Use a sine wave with noise for more natural movement
+                            import time
+                            time_val = time.time() * 3  # Speed factor
+                            base_amplitude = 0.1 + 0.1 * np.sin(time_val)
+                            noise = 0.05 * np.random.random()
+                            amplitude = base_amplitude + noise
                             
-                            # Update the waveform
+                            # Add to waveform data
+                            self.waveform_data.append(amplitude)
+                            
+                            # Keep only the most recent points
+                            if len(self.waveform_data) > self.waveform_max_points:
+                                self.waveform_data = self.waveform_data[-self.waveform_max_points:]
+                            
+                            # Update the visualization
                             self.update_waveform()
                             
                             # Schedule the next animation frame if still speaking
                             if self.speaking:
-                                self.root.after(100, animate_speaking)
+                                self.root.after(50, animate_speaking)
                         
                         # Start the speaking animation
                         self.root.after(0, animate_speaking)
