@@ -737,11 +737,11 @@ class SimpleSpeechProcessorUI:
             logger.info("Starting silence detection")
             time.sleep(0.5)
             
-            # Adjusted silence detection parameters for faster response
-            silence_threshold = 0.01  # Threshold for silence detection
+            # Adjusted silence detection parameters for longer pauses
+            silence_threshold = 0.008  # Reduced threshold to be more sensitive to quiet speech (was 0.01)
             silence_duration = 0
-            max_silence = 1.5  # Reduced from 3.0s to 1.5s for faster response
-            check_interval = 0.1  # Reduced from 0.2s to 0.1s for more responsive detection
+            max_silence = 5.0  # Increased from 1.5s to 5.0s to allow for longer thinking pauses
+            check_interval = 0.1  # Check every 100ms
             
             logger.debug(f"Silence detection parameters: threshold={silence_threshold}, max_silence={max_silence}s, check_interval={check_interval}s")
             
