@@ -677,6 +677,16 @@ def launch_ui() -> str:
             logger.info("Starting new UI process...")
             print("Starting speech UI process...")
             
+            # Create a command file path to check for UI readiness
+            COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
+            
+            # Clear any existing command file
+            try:
+                if os.path.exists(COMMAND_FILE):
+                    os.remove(COMMAND_FILE)
+            except Exception as e:
+                logger.warning(f"Could not clear existing command file: {e}")
+            
             # Start the UI process
             ui_process = subprocess.Popen(
                 [sys.executable, "-m", "speech_mcp.ui"],
@@ -693,10 +703,50 @@ def launch_ui() -> str:
             logger.info(f"UI process started with PID {ui_process.pid}")
             print(f"Speech UI started with PID {ui_process.pid}")
             
-            # Give the UI a moment to initialize
-            time.sleep(1.0)
+            # Wait for UI to fully initialize by checking for the UI_READY command
+            max_wait_time = 10  # Maximum wait time in seconds
+            wait_interval = 0.2  # Check every 200ms
+            waited_time = 0
+            ui_ready = False
             
-            return f"Speech UI launched successfully with PID {ui_process.pid}."
+            print("Waiting for UI to initialize...")
+            logger.info("Waiting for UI to initialize...")
+            
+            while waited_time < max_wait_time:
+                # Check if the process is still running
+                if not psutil.pid_exists(ui_process.pid):
+                    logger.error("UI process terminated unexpectedly")
+                    print("ERROR: UI process terminated unexpectedly")
+                    return "ERROR: UI process terminated unexpectedly."
+                
+                # Check if the command file exists and contains UI_READY
+                if os.path.exists(COMMAND_FILE):
+                    try:
+                        with open(COMMAND_FILE, 'r') as f:
+                            command = f.read().strip()
+                            if command == "UI_READY":
+                                ui_ready = True
+                                logger.info("UI reported ready state")
+                                print("UI is fully initialized and ready!")
+                                break
+                    except Exception as e:
+                        logger.warning(f"Error reading command file: {e}")
+                
+                # Wait before checking again
+                time.sleep(wait_interval)
+                waited_time += wait_interval
+                
+                # Log progress periodically
+                if int(waited_time) % 1 == 0 and waited_time > 0:
+                    logger.debug(f"Waiting for UI to initialize: {waited_time:.1f}s elapsed")
+                    print(f"Waiting for UI to initialize: {waited_time:.1f}s elapsed")
+            
+            if ui_ready:
+                return f"Speech UI launched successfully with PID {ui_process.pid} and is ready."
+            else:
+                logger.warning(f"UI did not report ready state within {max_wait_time}s, but process is running")
+                print(f"WARNING: UI started but did not report ready state within {max_wait_time}s")
+                return f"Speech UI launched with PID {ui_process.pid}, but readiness state is unknown."
     except Exception as e:
         logger.error(f"Error starting UI process: {e}")
         print(f"ERROR: Failed to start speech UI: {e}")
@@ -740,6 +790,20 @@ def start_conversation() -> str:
         logger.info("Beginning to listen for speech in start_conversation()")
         print("INFO: Beginning to listen for speech in start_conversation()")
         
+        # Set listening state before starting to ensure UI shows the correct state
+        speech_state["listening"] = True
+        save_speech_state(speech_state)
+        
+        # Create a special command file to signal LISTEN state to the UI
+        # This ensures the audio blips are played
+        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
+        try:
+            with open(COMMAND_FILE, 'w') as f:
+                f.write("LISTEN")
+            logger.debug("Sent LISTEN command to UI")
+        except Exception as e:
+            logger.error(f"Error writing LISTEN command: {e}")
+        
         # Use a queue to get the result from the thread
         import queue
         result_queue = queue.Queue()
@@ -766,6 +830,20 @@ def start_conversation() -> str:
             transcription = result_queue.get(timeout=timeout)
             logger.info(f"start_conversation() completed successfully with transcription: {transcription}")
             print(f"INFO: start_conversation() completed successfully with transcription: {transcription}")
+            
+            # Signal that we're done listening
+            speech_state["listening"] = False
+            save_speech_state(speech_state)
+            
+            # Create a special command file to signal IDLE state to the UI
+            # This ensures the audio blips are played
+            try:
+                with open(COMMAND_FILE, 'w') as f:
+                    f.write("IDLE")
+                logger.debug("Sent IDLE command to UI")
+            except Exception as e:
+                logger.error(f"Error writing IDLE command: {e}")
+            
             return transcription
         except queue.Empty:
             logger.error(f"Timeout waiting for transcription after {timeout} seconds")
@@ -774,6 +852,14 @@ def start_conversation() -> str:
             # Update state to stop listening
             speech_state["listening"] = False
             save_speech_state(speech_state)
+            
+            # Signal that we're done listening
+            try:
+                with open(COMMAND_FILE, 'w') as f:
+                    f.write("IDLE")
+                logger.debug("Sent IDLE command to UI")
+            except Exception as e:
+                logger.error(f"Error writing IDLE command: {e}")
             
             # Create an emergency transcription
             emergency_message = f"ERROR: Timeout waiting for speech transcription after {timeout} seconds."
@@ -788,6 +874,15 @@ def start_conversation() -> str:
         # Update state to stop listening
         speech_state["listening"] = False
         save_speech_state(speech_state)
+        
+        # Signal that we're done listening
+        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
+        try:
+            with open(COMMAND_FILE, 'w') as f:
+                f.write("IDLE")
+            logger.debug("Sent IDLE command to UI")
+        except Exception as e:
+            logger.error(f"Error writing IDLE command: {e}")
         
         # Return an error message instead of raising an exception
         error_message = f"ERROR: Failed to start conversation: {str(e)}"

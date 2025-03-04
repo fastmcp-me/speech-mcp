@@ -286,9 +286,6 @@ class SimpleSpeechProcessorUI:
                 text=f"Audio Error: {str(e)[:30]}..."
             ))
         
-        # Load speech state
-        self.load_speech_state()
-        
         # Create the UI components
         # Main frame
         self.main_frame = tk.Frame(self.root)
@@ -315,6 +312,9 @@ class SimpleSpeechProcessorUI:
         )
         self.waveform_canvas.pack(expand=True, fill="both", padx=5, pady=5)
         
+        # Load speech state
+        self.load_speech_state()
+        
         # Load whisper in a background thread
         print("Checking for speech recognition module...")
         threading.Thread(target=self.initialize_speech_recognition, daemon=True).start()
@@ -332,8 +332,15 @@ class SimpleSpeechProcessorUI:
         # Handle window close event
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         
+        # Initialize UI to a proper state
+        self.root.after(100, self.update_ui_from_state)
+        
         print("Speech processor initialization complete!")
         logger.info("Speech processor initialized successfully")
+        self.status_label.config(text="Ready")
+        
+        # Update the waveform to show the initial state
+        self.root.after(200, self.update_waveform)
     
     def initialize_speech_recognition(self):
         """Initialize speech recognition in a background thread"""
@@ -430,6 +437,9 @@ class SimpleSpeechProcessorUI:
             # Stop listening if still active
             if hasattr(self, 'stream') and self.stream is not None:
                 self.root.after(0, self.stop_listening)
+        
+        # Always schedule another waveform update to ensure the UI stays responsive
+        self.root.after(self.waveform_update_interval * 2, self.update_waveform)
     
     def update_waveform(self):
         """Update the circular audio visualization on the canvas"""
@@ -995,120 +1005,148 @@ class SimpleSpeechProcessorUI:
     
     def check_for_responses(self):
         """Periodically check for new responses to speak"""
+        # Add a lock to prevent multiple TTS instances from running simultaneously
+        self.tts_lock = threading.Lock()
+        
         while self.should_update:
             try:
                 if os.path.exists(RESPONSE_FILE):
-                    # Read the response
-                    logger.debug(f"Found response file: {RESPONSE_FILE}")
-                    try:
-                        with open(RESPONSE_FILE, 'r') as f:
-                            response = f.read().strip()
-                        
-                        logger.debug(f"Read response text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
-                    except Exception as e:
-                        logger.error(f"Error reading response file: {e}", exc_info=True)
-                        time.sleep(0.5)
-                        continue
-                    
-                    # Delete the file
-                    try:
-                        logger.debug("Removing response file")
-                        os.remove(RESPONSE_FILE)
-                    except Exception as e:
-                        logger.warning(f"Error removing response file: {e}")
-                    
-                    # Process the response
-                    if response:
-                        self.last_response = response
-                        self.speaking = True
-                        self.save_speech_state()
-                        self.root.after(0, self.update_ui_from_state)
-                        
-                        # Create a simple speaking animation
-                        def animate_speaking():
-                            if not self.speaking:
-                                return
-                                
-                            # Generate a random amplitude for speaking animation
-                            # Use a sine wave with noise for more natural movement
-                            import time
-                            time_val = time.time() * 3  # Speed factor
-                            base_amplitude = 0.1 + 0.1 * np.sin(time_val)
-                            noise = 0.05 * np.random.random()
-                            amplitude = base_amplitude + noise
-                            
-                            # Add to waveform data
-                            self.waveform_data.append(amplitude)
-                            
-                            # Keep only the most recent points
-                            if len(self.waveform_data) > self.waveform_max_points:
-                                self.waveform_data = self.waveform_data[-self.waveform_max_points:]
-                            
-                            # Update the visualization
-                            self.update_waveform()
-                            
-                            # Schedule the next animation frame if still speaking
-                            if self.speaking:
-                                self.root.after(50, animate_speaking)
-                        
-                        # Start the speaking animation
-                        self.root.after(0, animate_speaking)
-                        
-                        logger.info(f"Speaking text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
-                        print(f"Speaking: \"{response}\"")
-                        
-                        # Use actual text-to-speech if available
-                        if tts_available:
+                    # Only proceed if we're not already speaking
+                    if not self.speaking and self.tts_lock.acquire(blocking=False):
+                        try:
+                            # Read the response
+                            logger.debug(f"Found response file: {RESPONSE_FILE}")
                             try:
-                                logger.debug("Using TTS engine for text-to-speech")
+                                with open(RESPONSE_FILE, 'r') as f:
+                                    response = f.read().strip()
                                 
-                                # If we're using our Kokoro adapter
-                                if hasattr(tts_engine, 'speak'):
-                                    # Use the speak method directly
-                                    tts_start = time.time()
-                                    tts_engine.speak(response)
-                                    tts_duration = time.time() - tts_start
-                                    logger.info(f"Kokoro TTS completed in {tts_duration:.2f} seconds")
-                                    print("Speech completed.")
-                                else:
-                                    # Use pyttsx3 directly
-                                    # Log TTS settings
-                                    rate = tts_engine.getProperty('rate')
-                                    volume = tts_engine.getProperty('volume')
-                                    voice = tts_engine.getProperty('voice')
-                                    logger.debug(f"TTS settings - Rate: {rate}, Volume: {volume}, Voice: {voice}")
-
-                                    # Speak the text
-                                    tts_start = time.time()
-                                    tts_engine.say(response)
-                                    tts_engine.runAndWait()
-                                    tts_duration = time.time() - tts_start
-                                    
-                                    logger.info(f"Speech completed in {tts_duration:.2f} seconds")
-                                    print("Speech completed.")
+                                logger.debug(f"Read response text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
                             except Exception as e:
-                                logger.error(f"Error using text-to-speech: {e}", exc_info=True)
-                                print(f"Error using text-to-speech: {e}")
-                                # Fall back to simulated speech
-                                logger.info("Falling back to simulated speech")
-                                speaking_duration = len(response) * 0.05  # 50ms per character
-                                time.sleep(speaking_duration)
-                        else:
-                            # Simulate speaking time if TTS not available
-                            logger.debug("TTS not available, simulating speech timing")
-                            speaking_duration = len(response) * 0.05  # 50ms per character
-                            logger.debug(f"Simulating speech for {speaking_duration:.2f} seconds")
-                            time.sleep(speaking_duration)
-                        
-                        # Update state when done speaking
-                        self.speaking = False
-                        self.waveform_data = []  # Clear waveform data
-                        self.save_speech_state()
-                        self.root.after(0, self.update_ui_from_state)
-                        print("Done speaking.")
-                        logger.info("Done speaking")
+                                logger.error(f"Error reading response file: {e}", exc_info=True)
+                                self.tts_lock.release()
+                                time.sleep(0.5)
+                                continue
+                            
+                            # Delete the file immediately to prevent duplicate processing
+                            try:
+                                logger.debug("Removing response file")
+                                os.remove(RESPONSE_FILE)
+                            except Exception as e:
+                                logger.warning(f"Error removing response file: {e}")
+                            
+                            # Process the response
+                            if response:
+                                self.last_response = response
+                                self.speaking = True
+                                self.save_speech_state()
+                                self.root.after(0, self.update_ui_from_state)
+                                
+                                # Create a simple speaking animation
+                                def animate_speaking():
+                                    if not self.speaking:
+                                        return
+                                        
+                                    # Generate a random amplitude for speaking animation
+                                    # Use a sine wave with noise for more natural movement
+                                    import time
+                                    time_val = time.time() * 3  # Speed factor
+                                    base_amplitude = 0.1 + 0.1 * np.sin(time_val)
+                                    noise = 0.05 * np.random.random()
+                                    amplitude = base_amplitude + noise
+                                    
+                                    # Add to waveform data
+                                    self.waveform_data.append(amplitude)
+                                    
+                                    # Keep only the most recent points
+                                    if len(self.waveform_data) > self.waveform_max_points:
+                                        self.waveform_data = self.waveform_data[-self.waveform_max_points:]
+                                    
+                                    # Update the visualization
+                                    self.update_waveform()
+                                    
+                                    # Schedule the next animation frame if still speaking
+                                    if self.speaking:
+                                        self.root.after(50, animate_speaking)
+                                
+                                # Start the speaking animation
+                                self.root.after(0, animate_speaking)
+                                
+                                logger.info(f"Speaking text ({len(response)} chars): {response[:100]}{'...' if len(response) > 100 else ''}")
+                                print(f"Speaking: \"{response}\"")
+                                
+                                # Use actual text-to-speech if available
+                                if tts_available:
+                                    try:
+                                        logger.debug("Using TTS engine for text-to-speech")
+                                        
+                                        # If we're using our Kokoro adapter
+                                        if hasattr(tts_engine, 'speak'):
+                                            # Use the speak method directly
+                                            tts_start = time.time()
+                                            tts_engine.speak(response)
+                                            tts_duration = time.time() - tts_start
+                                            logger.info(f"Kokoro TTS completed in {tts_duration:.2f} seconds")
+                                            print("Speech completed.")
+                                        else:
+                                            # Use pyttsx3 directly
+                                            # Log TTS settings
+                                            rate = tts_engine.getProperty('rate')
+                                            volume = tts_engine.getProperty('volume')
+                                            voice = tts_engine.getProperty('voice')
+                                            logger.debug(f"TTS settings - Rate: {rate}, Volume: {volume}, Voice: {voice}")
+
+                                            # Speak the text
+                                            tts_start = time.time()
+                                            tts_engine.say(response)
+                                            tts_engine.runAndWait()
+                                            tts_duration = time.time() - tts_start
+                                            
+                                            logger.info(f"Speech completed in {tts_duration:.2f} seconds")
+                                            print("Speech completed.")
+                                    except Exception as e:
+                                        logger.error(f"Error using text-to-speech: {e}", exc_info=True)
+                                        print(f"Error using text-to-speech: {e}")
+                                        # Fall back to simulated speech
+                                        logger.info("Falling back to simulated speech")
+                                        speaking_duration = len(response) * 0.05  # 50ms per character
+                                        time.sleep(speaking_duration)
+                                else:
+                                    # Simulate speaking time if TTS not available
+                                    logger.debug("TTS not available, simulating speech timing")
+                                    speaking_duration = len(response) * 0.05  # 50ms per character
+                                    logger.debug(f"Simulating speech for {speaking_duration:.2f} seconds")
+                                    time.sleep(speaking_duration)
+                                
+                                # Update state when done speaking
+                                self.speaking = False
+                                self.waveform_data = []  # Clear waveform data
+                                self.save_speech_state()
+                                self.root.after(0, self.update_ui_from_state)
+                                print("Done speaking.")
+                                logger.info("Done speaking")
+                                
+                                # Release the lock when done
+                                self.tts_lock.release()
+                        except Exception as e:
+                            logger.error(f"Error processing response: {e}", exc_info=True)
+                            # Make sure we release the lock on error
+                            self.speaking = False
+                            self.save_speech_state()
+                            try:
+                                self.tts_lock.release()
+                            except RuntimeError:
+                                pass  # Ignore if lock wasn't acquired
             except Exception as e:
                 logger.error(f"Error checking for responses: {e}", exc_info=True)
+                # Make sure we're not stuck in speaking state
+                if self.speaking:
+                    self.speaking = False
+                    self.save_speech_state()
+                # Try to release the lock if we might have it
+                try:
+                    self.tts_lock.release()
+                except RuntimeError:
+                    pass  # Ignore if lock wasn't acquired
             
             time.sleep(0.1)  # Check every 100ms for faster response
     
