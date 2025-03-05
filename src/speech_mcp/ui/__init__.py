@@ -1,4 +1,3 @@
-import tkinter as tk
 import os
 import sys
 import json
@@ -8,6 +7,12 @@ import logging
 import tempfile
 import io
 from queue import Queue
+
+import sysconfig
+os.environ["PYTHONPATH"] = os.path.join(sysconfig.get_paths()['stdlib'], 'site-packages')
+os.environ["TCL_LIBRARY"] = os.path.join(sysconfig.get_paths()['stdlib'], '..', 'tcl8.6')
+os.environ["TK_LIBRARY"] = os.path.join(sysconfig.get_paths()['stdlib'], '..', 'tk8.6')
+import tkinter as tk
 
 # Set up logging
 LOG_DIR = os.path.expanduser("~/.cache/goose/speech-mcp/logs")
