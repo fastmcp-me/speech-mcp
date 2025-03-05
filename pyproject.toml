@@ -1,6 +1,6 @@
 [project]
 name = "speech-mcp"
-version = "0.4.2"
+version = "0.4.4"
 description = "Speech MCP Server with command-line interface and Kokoro TTS support"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,16 +13,15 @@ dependencies = [
     "faster-whisper>=0.10.0",  # Using faster-whisper instead of openai-whisper
     "numba>=0.57.0",  # Specify a newer version of numba that supports Python 3.10
     "pyttsx3>=2.90",   # Add pyttsx3 for text-to-speech
-    "psutil>=5.9.0"    # Add psutil for process management
-]
-
-[project.optional-dependencies]
-kokoro = [
+    "psutil>=5.9.0",    # Add psutil for process management
     "kokoro>=0.8.4",   # Kokoro TTS
     "soundfile",       # For audio file handling
     "torch",           # Required by Kokoro
     "misaki[en]"       # G2P library for English
 ]
+
+[project.optional-dependencies]
+
 ja = [
     "misaki[ja]"       # Japanese support for Kokoro
 ]
@@ -30,20 +29,24 @@ zh = [
     "misaki[zh]"       # Chinese support for Kokoro
 ]
 all = [
-    "speech-mcp[kokoro,ja,zh]"  # All optional dependencies
+    "speech-mcp[ja,zh]"  # All optional dependencies
 ]
 
 [project.scripts]
-speech-mcp = "speech_mcp:main"
-
-[tool.hatch.build]
-packages = ["speech_mcp"]
-package-dir = "src"
-
-[tool.hatch.build.targets.wheel]
-only-include = ["src/speech_mcp"]
-sources = ["src"]
+speech-mcp = "speech_mcp.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "src/**/*.py",
+    "src/**/resources/**/*",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/speech_mcp"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
