@@ -2,6 +2,10 @@
 
 A Goose MCP extension for voice interaction with audio visualization.
 
+
+https://github.com/user-attachments/assets/cdbab55b-1f5d-4fff-9ab8-39b485169ac4
+
+
 ## Overview
 
 Speech MCP provides a voice interface for Goose, allowing users to interact through speech rather than text. It includes:
