@@ -1,51 +1,43 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
 name = "speech-mcp"
 version = "0.4.6"
 description = "Speech MCP Server with command-line interface and Kokoro TTS support"
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [
-    {name = "Block", email = "block@squareup.com"}
-]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-]
-
 dependencies = [
     "mcp[cli]>=1.2.0",
-    "SpeechRecognition>=3.10.0",
+    "SpeechRecognition>=3.10.0",  # Fallback speech recognition
     "numpy>=1.24.0",
     "pyaudio>=0.2.13",
     "pydub>=0.25.1",
-    "faster-whisper>=0.10.0",
-    "numba>=0.57.0",
-    "pyttsx3>=2.90",
-    "psutil>=5.9.0",
-    "kokoro>=0.7.4",
-    "soundfile",
-    "torch",
-    "misaki[en]"
+    "faster-whisper>=0.10.0",  # Using faster-whisper instead of openai-whisper
+    "numba>=0.57.0",  # Specify a newer version of numba that supports Python 3.10
+    "pyttsx3>=2.90",   # Add pyttsx3 for text-to-speech
+    "psutil>=5.9.0",    # Add psutil for process management
+    "kokoro>=0.8.4",   # Kokoro TTS
+    "soundfile",       # For audio file handling
+    "torch",           # Required by Kokoro
+    "misaki[en]"       # G2P library for English
 ]
 
 [project.optional-dependencies]
-ja = ["misaki[ja]"]
-zh = ["misaki[zh]"]
-all = ["speech-mcp[ja,zh]"]
+
+ja = [
+    "misaki[ja]"       # Japanese support for Kokoro
+]
+zh = [
+    "misaki[zh]"       # Chinese support for Kokoro
+]
+all = [
+    "speech-mcp[ja,zh]"  # All optional dependencies
+]
 
 [project.scripts]
 speech-mcp = "speech_mcp.__main__:main"
-speech-mcp-check = "speech_mcp.install_check:main"
 
-[project.urls]
-Homepage = "https://github.com/block/speech-mcp"
-Repository = "https://github.com/block/speech-mcp.git"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = [
@@ -58,6 +50,3 @@ packages = ["src/speech_mcp"]
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
-
-[tool.hatch.build.hooks.custom]
-path = "src/speech_mcp/build_hook.py"

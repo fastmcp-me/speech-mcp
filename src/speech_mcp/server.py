@@ -29,56 +29,15 @@ DEFAULT_SPEECH_STATE = {
 }
 
 # Set up logging
-LOG_DIR = os.path.expanduser("~/.cache/goose/speech-mcp/logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "speech-mcp-server.log")),
+        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech-mcp-server.log")),
         logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
-
-# Log important paths
-logger.info(f"Server Module Location: {__file__}")
-logger.info(f"Current Working Directory: {os.getcwd()}")
-logger.info(f"Python Path: {sys.path}")
-logger.info(f"Module Search Path: {[p for p in sys.path if os.path.exists(p)]}")
-
-# Log resolved paths for critical files
-module_dir = os.path.dirname(os.path.abspath(__file__))
-logger.info(f"Module Directory: {module_dir}")
-
-state_file = os.path.join(module_dir, "speech_state.json")
-transcription_file = os.path.join(module_dir, "transcription.txt")
-response_file = os.path.join(module_dir, "response.txt")
-command_file = os.path.join(module_dir, "ui_command.txt")
-
-logger.info("Critical File Paths:")
-logger.info(f"  State File: {state_file}")
-logger.info(f"  Transcription File: {transcription_file}")
-logger.info(f"  Response File: {response_file}")
-logger.info(f"  Command File: {command_file}")
-
-# Verify file access
-def check_file_access(path, description):
-    dir_path = os.path.dirname(path)
-    logger.info(f"Checking {description}:")
-    logger.info(f"  Directory exists: {os.path.exists(dir_path)}")
-    logger.info(f"  Directory writable: {os.access(dir_path, os.W_OK)}")
-    if os.path.exists(path):
-        logger.info(f"  File exists and {'writable' if os.access(path, os.W_OK) else 'not writable'}")
-    else:
-        logger.info("  File does not exist yet")
-
-# Check access for all critical files
-check_file_access(state_file, "State File")
-check_file_access(transcription_file, "Transcription File")
-check_file_access(response_file, "Response File")
-check_file_access(command_file, "Command File")
 
 # Load speech state from file or use default
 def load_speech_state():
@@ -712,33 +671,13 @@ def launch_ui() -> str:
             except Exception as e:
                 logger.warning(f"Could not clear existing command file: {e}")
             
-            # Log Python path and current directory for debugging
-            logger.info(f"Current directory: {os.getcwd()}")
-            logger.info(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not set')}")
-            logger.info(f"sys.path: {sys.path}")
-            logger.info(f"Using Python executable: {sys.executable}")
-            
-            # Start the UI process with environment info
-            try:
-                ui_process = subprocess.Popen(
-                    [sys.executable, "-m", "speech_mcp.ui"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    env=dict(os.environ, PYTHONPATH=os.getcwd() + os.pathsep + os.environ.get('PYTHONPATH', ''))
-                )
-                
-                # Start threads to continuously read output
-                def log_output(pipe, prefix):
-                    for line in iter(pipe.readline, ''):
-                        logger.info(f"{prefix}: {line.strip()}")
-                
-                threading.Thread(target=log_output, args=(ui_process.stdout, "UI stdout"), daemon=True).start()
-                threading.Thread(target=log_output, args=(ui_process.stderr, "UI stderr"), daemon=True).start()
-                
-            except Exception as e:
-                logger.error(f"Failed to start UI process: {e}", exc_info=True)
-                return f"ERROR: Failed to start UI process: {str(e)}"
+            # Start the UI process
+            ui_process = subprocess.Popen(
+                [sys.executable, "-m", "speech_mcp.ui"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
             
             # Update the speech state
             speech_state["ui_active"] = True
@@ -787,30 +726,11 @@ def launch_ui() -> str:
                     print(f"Waiting for UI to initialize: {waited_time:.1f}s elapsed")
             
             if ui_ready:
-                # Check for any error output
-                try:
-                    stderr_output = ui_process.stderr.read()
-                    if stderr_output:
-                        logger.warning(f"UI process reported errors: {stderr_output}")
-                        print(f"WARNING: UI process reported errors: {stderr_output}")
-                except Exception as e:
-                    logger.warning(f"Could not read UI process stderr: {e}")
-                
                 return f"Speech UI launched successfully with PID {ui_process.pid} and is ready."
             else:
-                # Try to get any error output
-                try:
-                    stderr_output = ui_process.stderr.read()
-                    if stderr_output:
-                        error_msg = f"UI failed to start properly. Errors: {stderr_output}"
-                        logger.error(error_msg)
-                        print(f"ERROR: {error_msg}")
-                        return f"ERROR: {error_msg}"
-                except Exception as e:
-                    logger.warning(f"Could not read UI process stderr: {e}")
-                
                 logger.warning(f"UI did not report ready state within {max_wait_time}s, but process is running")
                 print(f"WARNING: UI started but did not report ready state within {max_wait_time}s")
+                return f"Speech UI launched with PID {ui_process.pid}, but readiness state is unknown."
     except Exception as e:
         logger.error(f"Error starting UI process: {e}")
         print(f"ERROR: Failed to start speech UI: {e}")

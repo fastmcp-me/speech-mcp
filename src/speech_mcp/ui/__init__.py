@@ -15,58 +15,16 @@ os.environ["TK_LIBRARY"] = os.path.join(sysconfig.get_paths()['stdlib'], '..', '
 import tkinter as tk
 
 # Set up logging
-LOG_DIR = os.path.expanduser("~/.cache/goose/speech-mcp/logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-
+log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech-mcp-ui.log")
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(levelname)s: %(message)s',  # Very simple format for easier parsing
     handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "speech-mcp-ui.log")),
+        logging.FileHandler(log_file),
         logging.StreamHandler(sys.stdout)  # Explicitly use stdout
     ]
 )
 logger = logging.getLogger(__name__)
-
-# Log important paths
-logger.info(f"UI Module Location: {__file__}")
-logger.info(f"Current Working Directory: {os.getcwd()}")
-logger.info(f"Python Path: {sys.path}")
-logger.info(f"Module Search Path: {[p for p in sys.path if os.path.exists(p)]}")
-
-# Log resolved paths for critical files
-module_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(module_dir)
-logger.info(f"Module Directory: {module_dir}")
-logger.info(f"Parent Directory: {parent_dir}")
-
-state_file = os.path.join(parent_dir, "speech_state.json")
-transcription_file = os.path.join(parent_dir, "transcription.txt")
-response_file = os.path.join(parent_dir, "response.txt")
-command_file = os.path.join(parent_dir, "ui_command.txt")
-
-logger.info("Critical File Paths:")
-logger.info(f"  State File: {state_file}")
-logger.info(f"  Transcription File: {transcription_file}")
-logger.info(f"  Response File: {response_file}")
-logger.info(f"  Command File: {command_file}")
-
-# Verify file access
-def check_file_access(path, description):
-    dir_path = os.path.dirname(path)
-    logger.info(f"Checking {description}:")
-    logger.info(f"  Directory exists: {os.path.exists(dir_path)}")
-    logger.info(f"  Directory writable: {os.access(dir_path, os.W_OK)}")
-    if os.path.exists(path):
-        logger.info(f"  File exists and {'writable' if os.access(path, os.W_OK) else 'not writable'}")
-    else:
-        logger.info("  File does not exist yet")
-
-# Check access for all critical files
-check_file_access(state_file, "State File")
-check_file_access(transcription_file, "Transcription File")
-check_file_access(response_file, "Response File")
-check_file_access(command_file, "Command File")
 
 # Path to audio notification files
 AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "audio")
