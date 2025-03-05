@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "speech-mcp"
-version = "0.4.5"
+version = "0.4.6"
 description = "Speech MCP Server with command-line interface and Kokoro TTS support"
 readme = "README.md"
 requires-python = ">=3.10"
