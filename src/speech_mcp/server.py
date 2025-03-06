@@ -257,7 +257,7 @@ def initialize_tts():
             return False
 
 def ensure_ui_is_running():
-    """Ensure the UI process is running"""
+    """Ensure the PyQt UI process is running"""
     global speech_state
     
     # Check if UI is already active
@@ -268,20 +268,21 @@ def ensure_ui_is_running():
             if psutil.pid_exists(process_id):
                 process = psutil.Process(process_id)
                 if process.status() != psutil.STATUS_ZOMBIE:
-                    logger.info(f"UI process already running with PID {process_id}")
+                    logger.info(f"PyQt UI process already running with PID {process_id}")
                     return True
         except Exception as e:
             logger.error(f"Error checking UI process: {e}")
     
-    # Check for any existing UI processes by looking for Python processes running speech_mcp.ui
+    # Check for any existing UI processes by looking for Python processes running speech_mcp.ui.pyqt
     try:
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
                 cmdline = proc.info.get('cmdline', [])
                 if cmdline and len(cmdline) >= 3:
-                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
-                        # Found an existing UI process
-                        logger.info(f"Found existing UI process with PID {proc.info['pid']}")
+                    # Look specifically for PyQt UI processes
+                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui.pyqt' in cmdline[2]:
+                        # Found an existing PyQt UI process
+                        logger.info(f"Found existing PyQt UI process with PID {proc.info['pid']}")
                         
                         # Update our state to track this process
                         speech_state["ui_active"] = True
@@ -617,20 +618,20 @@ def listen_for_speech() -> str:
         )
 
 def cleanup_ui_process():
-    """Clean up the UI process when the server shuts down"""
+    """Clean up the PyQt UI process when the server shuts down"""
     global speech_state
     
     if speech_state.get("ui_active", False) and speech_state.get("ui_process_id"):
         try:
             process_id = speech_state["ui_process_id"]
             if psutil.pid_exists(process_id):
-                logger.info(f"Terminating UI process with PID {process_id}")
+                logger.info(f"Terminating PyQt UI process with PID {process_id}")
                 process = psutil.Process(process_id)
                 process.terminate()
                 try:
                     process.wait(timeout=3)
                 except psutil.TimeoutExpired:
-                    logger.warning(f"UI process {process_id} did not terminate, forcing kill")
+                    logger.warning(f"PyQt UI process {process_id} did not terminate, forcing kill")
                     process.kill()
             
             # Update state
@@ -638,9 +639,9 @@ def cleanup_ui_process():
             speech_state["ui_process_id"] = None
             save_speech_state(speech_state, False)
             
-            logger.info("UI process terminated")
+            logger.info("PyQt UI process terminated")
         except Exception as e:
-            logger.error(f"Error terminating UI process: {e}")
+            logger.error(f"Error terminating PyQt UI process: {e}")
 
 # Register cleanup function to be called on exit
 import atexit
@@ -660,7 +661,7 @@ def launch_ui() -> str:
     global speech_state
     
     logger.info("launch_ui() called")
-    print("Launching speech UI...")
+    print("Launching PyQt speech UI...")
     
     # Check if UI is already running
     if ensure_ui_is_running():
@@ -675,9 +676,10 @@ def launch_ui() -> str:
             try:
                 cmdline = proc.info.get('cmdline', [])
                 if cmdline and len(cmdline) >= 3:
-                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
-                        # Found an existing UI process
-                        logger.info(f"Found existing UI process with PID {proc.info['pid']}")
+                    # Look specifically for PyQt UI processes
+                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui.pyqt' in cmdline[2]:
+                        # Found an existing PyQt UI process
+                        logger.info(f"Found existing PyQt UI process with PID {proc.info['pid']}")
                         existing_ui = True
                         
                         # Update our state to track this process
@@ -685,14 +687,14 @@ def launch_ui() -> str:
                         speech_state["ui_process_id"] = proc.info['pid']
                         save_speech_state(speech_state, False)
                         
-                        return f"Speech UI is already running with PID {proc.info['pid']}."
+                        return f"Speech PyQt UI is already running with PID {proc.info['pid']}."
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
         
         # Start a new UI process if none exists
         if not existing_ui:
-            logger.info("Starting new UI process...")
-            print("Starting speech UI process...")
+            logger.info("Starting new PyQt UI process...")
+            print("Starting PyQt speech UI process...")
             
             # Create a command file path to check for UI readiness
             COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
@@ -704,9 +706,9 @@ def launch_ui() -> str:
             except Exception as e:
                 logger.warning(f"Could not clear existing command file: {e}")
             
-            # Start the UI process
+            # Start the PyQt UI process
             ui_process = subprocess.Popen(
-                [sys.executable, "-m", "speech_mcp.ui"],
+                [sys.executable, "-m", "speech_mcp.ui.pyqt"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
@@ -717,7 +719,7 @@ def launch_ui() -> str:
             speech_state["ui_process_id"] = ui_process.pid
             save_speech_state(speech_state, False)
             
-            logger.info(f"UI process started with PID {ui_process.pid}")
+            logger.info(f"PyQt UI process started with PID {ui_process.pid}")
             print(f"Speech UI started with PID {ui_process.pid}")
             
             # Wait for UI to fully initialize by checking for the UI_READY command
@@ -732,9 +734,9 @@ def launch_ui() -> str:
             while waited_time < max_wait_time:
                 # Check if the process is still running
                 if not psutil.pid_exists(ui_process.pid):
-                    logger.error("UI process terminated unexpectedly")
-                    print("ERROR: UI process terminated unexpectedly")
-                    return "ERROR: UI process terminated unexpectedly."
+                    logger.error("PyQt UI process terminated unexpectedly")
+                    print("ERROR: PyQt UI process terminated unexpectedly")
+                    return "ERROR: PyQt UI process terminated unexpectedly."
                 
                 # Check if the command file exists and contains UI_READY
                 if os.path.exists(COMMAND_FILE):
@@ -759,15 +761,15 @@ def launch_ui() -> str:
                     print(f"Waiting for UI to initialize: {waited_time:.1f}s elapsed")
             
             if ui_ready:
-                return f"Speech UI launched successfully with PID {ui_process.pid} and is ready."
+                return f"PyQt Speech UI launched successfully with PID {ui_process.pid} and is ready."
             else:
-                logger.warning(f"UI did not report ready state within {max_wait_time}s, but process is running")
-                print(f"WARNING: UI started but did not report ready state within {max_wait_time}s")
-                return f"Speech UI launched with PID {ui_process.pid}, but readiness state is unknown."
+                logger.warning(f"PyQt UI did not report ready state within {max_wait_time}s, but process is running")
+                print(f"WARNING: PyQt UI started but did not report ready state within {max_wait_time}s")
+                return f"PyQt Speech UI launched with PID {ui_process.pid}, but readiness state is unknown."
     except Exception as e:
-        logger.error(f"Error starting UI process: {e}")
-        print(f"ERROR: Failed to start speech UI: {e}")
-        return f"ERROR: Failed to launch Speech UI: {str(e)}"
+        logger.error(f"Error starting PyQt UI process: {e}")
+        print(f"ERROR: Failed to start PyQt speech UI: {e}")
+        return f"ERROR: Failed to launch PyQt Speech UI: {str(e)}"
 
 @mcp.tool()
 def start_conversation() -> str:
@@ -799,8 +801,8 @@ def start_conversation() -> str:
     # Check if UI is running but don't launch it automatically
     ui_running = ensure_ui_is_running()
     if not ui_running:
-        logger.warning("Speech UI is not running. Use launch_ui() to start it for visual feedback.")
-        print("WARNING: Speech UI is not running. Use launch_ui() for visual feedback.")
+        logger.warning("PyQt Speech UI is not running. Use launch_ui() to start it for visual feedback.")
+        print("WARNING: PyQt Speech UI is not running. Use launch_ui() for visual feedback.")
     
     # Start listening
     try:
@@ -955,8 +957,8 @@ def reply(text: str) -> str:
     # Check if UI is running but don't launch it automatically
     ui_running = ensure_ui_is_running()
     if not ui_running:
-        logger.warning("Speech UI is not running. Use launch_ui() to start it for visual feedback.")
-        print("WARNING: Speech UI is not running. Use launch_ui() for visual feedback.")
+        logger.warning("PyQt Speech UI is not running. Use launch_ui() to start it for visual feedback.")
+        print("WARNING: PyQt Speech UI is not running. Use launch_ui() for visual feedback.")
     
     # Start listening for response
     try:
@@ -1075,10 +1077,11 @@ def usage_guide() -> str:
     ## Tips
     
     - For best results, use a quiet environment and speak clearly
-    - Use the `launch_ui()` function to start the visual interface:
-      - The UI shows when the microphone is active and listening
+    - Use the `launch_ui()` function to start the visual PyQt interface:
+      - The PyQt UI shows when the microphone is active and listening
       - A blue pulsing circle indicates active listening
       - A green circle indicates the system is speaking
+      - Voice selection is available in the UI dropdown
       - Only one UI instance can run at a time (prevents duplicates)
     - The system automatically detects silence to know when you've finished speaking
       - Silence detection waits for 5 seconds of quiet before stopping recording
