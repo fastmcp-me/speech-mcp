@@ -17,7 +17,8 @@ dependencies = [
     "kokoro>=0.8.4",   # Kokoro TTS
     "soundfile",       # For audio file handling
     "torch",           # Required by Kokoro
-    "misaki[en]"       # G2P library for English
+    "misaki[en]",      # G2P library for English
+    "PyQt5>=5.15.0"    # Modern UI toolkit to replace tkinter
 ]
 
 [project.optional-dependencies]
