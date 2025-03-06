@@ -13,15 +13,205 @@ import tempfile
 import numpy as np
 import wave
 import pyaudio
+import importlib.util
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
-    QWidget, QLabel, QPushButton, QProgressBar
+    QWidget, QLabel, QPushButton, QProgressBar, QComboBox
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont
 
 # Setup logging
 logger = logging.getLogger(__name__)
+
+# Path to save speech state - same as in server.py
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "speech_state.json")
+TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "transcription.txt")
+RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "response.txt")
+COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ui_command.txt")
+
+# Audio parameters
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 16000
+
+# Path to audio notification files
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "resources", "audio")
+START_LISTENING_SOUND = os.path.join(AUDIO_DIR, "start_listening.wav")
+STOP_LISTENING_SOUND = os.path.join(AUDIO_DIR, "stop_listening.wav")
+
+class TTSAdapter(QObject):
+    """
+    Text-to-speech adapter for PyQt UI.
+    
+    This class provides an interface to use Kokoro for TTS, with a fallback
+    to pyttsx3 if Kokoro is not available.
+    """
+    speaking_finished = pyqtSignal()
+    speaking_started = pyqtSignal()
+    speaking_progress = pyqtSignal(float)  # Progress between 0.0 and 1.0
+    
+    def __init__(self):
+        super().__init__()
+        self.tts_engine = None
+        self.is_speaking = False
+        self.available_voices = []
+        self.current_voice = None
+        self.initialize_tts()
+    
+    def initialize_tts(self):
+        """Initialize the TTS engine"""
+        try:
+            # First try to import the Kokoro adapter
+            logger.info("Initializing Kokoro as primary TTS engine")
+            
+            # Check if Kokoro adapter is available
+            if importlib.util.find_spec("speech_mcp.tts_adapters.kokoro_adapter") is not None:
+                try:
+                    # Import Kokoro adapter
+                    from speech_mcp.tts_adapters.kokoro_adapter import KokoroTTS
+                    
+                    # Initialize with default voice settings
+                    self.tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+                    logger.info("Kokoro TTS adapter initialized successfully")
+                    
+                    # Get available voices
+                    self.available_voices = self.tts_engine.get_available_voices()
+                    self.current_voice = "af_heart"
+                    logger.debug(f"Available Kokoro TTS voices: {len(self.available_voices)}")
+                    for i, voice in enumerate(self.available_voices):
+                        logger.debug(f"Voice {i}: {voice}")
+                    
+                    return True
+                except ImportError as e:
+                    logger.warning(f"Failed to import Kokoro adapter: {e}")
+                    # Fall back to pyttsx3
+                except Exception as e:
+                    logger.error(f"Error initializing Kokoro: {e}")
+                    # Fall back to pyttsx3
+            
+            # Fall back to pyttsx3
+            logger.info("Falling back to pyttsx3 for TTS")
+            try:
+                import pyttsx3
+                self.tts_engine = pyttsx3.init()
+                logger.info("pyttsx3 text-to-speech engine initialized")
+                
+                # Get available voices
+                voices = self.tts_engine.getProperty('voices')
+                self.available_voices = [f"pyttsx3:{voice.id}" for voice in voices]
+                if self.available_voices:
+                    self.current_voice = self.available_voices[0]
+                logger.debug(f"Available pyttsx3 voices: {len(voices)}")
+                for i, voice in enumerate(voices):
+                    logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+                
+                return True
+            except ImportError as e:
+                logger.warning(f"pyttsx3 not available: {e}")
+            except Exception as e:
+                logger.error(f"Error initializing pyttsx3: {e}")
+            
+            logger.error("No TTS engine available")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error initializing TTS: {e}")
+            return False
+    
+    def speak(self, text):
+        """Speak the given text"""
+        if not text:
+            logger.warning("Empty text provided to speak")
+            return False
+        
+        if not self.tts_engine:
+            logger.warning("No TTS engine available")
+            return False
+        
+        # Prevent multiple simultaneous speech
+        if self.is_speaking:
+            logger.warning("Already speaking, ignoring new request")
+            return False
+        
+        self.is_speaking = True
+        self.speaking_started.emit()
+        
+        # Start speaking in a separate thread
+        threading.Thread(target=self._speak_thread, args=(text,), daemon=True).start()
+        return True
+    
+    def _speak_thread(self, text):
+        """Thread function for speaking text"""
+        try:
+            logger.info(f"Speaking text ({len(text)} chars): {text[:100]}{'...' if len(text) > 100 else ''}")
+            
+            # Use the appropriate TTS engine
+            if hasattr(self.tts_engine, 'speak'):
+                # This is the Kokoro adapter
+                result = self.tts_engine.speak(text)
+                if not result:
+                    logger.error("Kokoro TTS failed")
+            else:
+                # This is pyttsx3
+                self.tts_engine.say(text)
+                self.tts_engine.runAndWait()
+            
+            logger.info("Speech completed")
+        except Exception as e:
+            logger.error(f"Error during text-to-speech: {e}")
+        finally:
+            self.is_speaking = False
+            self.speaking_finished.emit()
+    
+    def set_voice(self, voice_id):
+        """Set the voice to use for TTS"""
+        if not self.tts_engine:
+            logger.warning("No TTS engine available")
+            return False
+        
+        try:
+            if self.tts_engine and hasattr(self.tts_engine, 'set_voice'):
+                # This is the Kokoro adapter
+                result = self.tts_engine.set_voice(voice_id)
+                if result:
+                    self.current_voice = voice_id
+                    logger.info(f"Voice set to: {voice_id}")
+                    return True
+                else:
+                    logger.error(f"Failed to set voice to: {voice_id}")
+                    return False
+            elif hasattr(self.tts_engine, 'setProperty'):
+                # This is pyttsx3
+                # Extract the voice ID from the format "pyttsx3:voice_id"
+                if voice_id.startswith("pyttsx3:"):
+                    voice_id = voice_id.split(":", 1)[1]
+                
+                # Find the voice object
+                for voice in self.tts_engine.getProperty('voices'):
+                    if voice.id == voice_id:
+                        self.tts_engine.setProperty('voice', voice.id)
+                        self.current_voice = f"pyttsx3:{voice.id}"
+                        logger.info(f"Voice set to: {voice.name}")
+                        return True
+                
+                logger.error(f"Voice not found: {voice_id}")
+                return False
+            
+            logger.warning("TTS engine does not support voice selection")
+            return False
+        except Exception as e:
+            logger.error(f"Error setting voice: {e}")
+            return False
+    
+    def get_available_voices(self):
+        """Get a list of available voices"""
+        return self.available_voices
+    
+    def get_current_voice(self):
+        """Get the current voice"""
+        return self.current_voice
 
 # Path to save speech state - same as in server.py
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "speech_state.json")
@@ -476,6 +666,11 @@ class PyQtSpeechUI(QMainWindow):
         self.audio_processor.audio_level_updated.connect(self.update_audio_level)
         self.audio_processor.transcription_ready.connect(self.handle_transcription)
         
+        # Initialize TTS adapter
+        self.tts_adapter = TTSAdapter()
+        self.tts_adapter.speaking_started.connect(self.on_speaking_started)
+        self.tts_adapter.speaking_finished.connect(self.on_speaking_finished)
+        
         # Create a command file to indicate UI is ready
         try:
             with open(COMMAND_FILE, 'w') as f:
@@ -541,6 +736,27 @@ class PyQtSpeechUI(QMainWindow):
         """)
         main_layout.addWidget(self.transcription_label)
         
+        # Voice selection
+        voice_layout = QHBoxLayout()
+        voice_label = QLabel("Voice:")
+        voice_label.setStyleSheet("color: #ffffff;")
+        self.voice_combo = QComboBox()
+        self.voice_combo.setStyleSheet("""
+            background-color: #2a2a2a;
+            color: #ffffff;
+            border: 1px solid #3a3a3a;
+            border-radius: 3px;
+            padding: 5px;
+        """)
+        
+        # Populate voice combo box
+        self.update_voice_list()
+        self.voice_combo.currentIndexChanged.connect(self.on_voice_changed)
+        
+        voice_layout.addWidget(voice_label)
+        voice_layout.addWidget(self.voice_combo, 1)  # 1 = stretch factor
+        main_layout.addLayout(voice_layout)
+        
         # Control buttons
         button_layout = QHBoxLayout()
         
@@ -548,6 +764,17 @@ class PyQtSpeechUI(QMainWindow):
         self.listen_button.clicked.connect(self.toggle_listening)
         self.listen_button.setStyleSheet("""
             background-color: #00a0e9;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 8px 16px;
+            font-weight: bold;
+        """)
+        
+        self.speak_button = QPushButton("Test Voice")
+        self.speak_button.clicked.connect(self.test_voice)
+        self.speak_button.setStyleSheet("""
+            background-color: #27ae60;
             color: white;
             border: none;
             border-radius: 5px;
@@ -567,6 +794,7 @@ class PyQtSpeechUI(QMainWindow):
         """)
         
         button_layout.addWidget(self.listen_button)
+        button_layout.addWidget(self.speak_button)
         button_layout.addWidget(self.close_button)
         main_layout.addLayout(button_layout)
         
@@ -583,6 +811,65 @@ class PyQtSpeechUI(QMainWindow):
                 color: #ffffff;
             }
         """)
+    
+    def update_voice_list(self):
+        """Update the voice selection combo box"""
+        self.voice_combo.clear()
+        voices = self.tts_adapter.get_available_voices()
+        current_voice = self.tts_adapter.get_current_voice()
+        
+        if not voices:
+            self.voice_combo.addItem("No voices available")
+            self.voice_combo.setEnabled(False)
+            return
+        
+        # Add all available voices
+        selected_index = 0
+        for i, voice in enumerate(voices):
+            # Format the voice name for display
+            if voice.startswith("pyttsx3:"):
+                # For pyttsx3 voices, try to get a more readable name
+                voice_id = voice.split(":", 1)[1]
+                if hasattr(self.tts_adapter.tts_engine, 'getProperty'):
+                    for v in self.tts_adapter.tts_engine.getProperty('voices'):
+                        if v.id == voice_id:
+                            display_name = f"{v.name} (pyttsx3)"
+                            self.voice_combo.addItem(display_name, voice)
+                            break
+                    else:
+                        self.voice_combo.addItem(voice, voice)
+                else:
+                    self.voice_combo.addItem(voice, voice)
+            else:
+                # For Kokoro voices, use the voice name directly
+                self.voice_combo.addItem(voice, voice)
+            
+            # Select the current voice
+            if voice == current_voice:
+                selected_index = i
+        
+        # Set the current selection
+        self.voice_combo.setCurrentIndex(selected_index)
+    
+    def on_voice_changed(self, index):
+        """Handle voice selection change"""
+        if index < 0:
+            return
+        
+        voice = self.voice_combo.itemData(index)
+        if not voice:
+            return
+        
+        logger.info(f"Voice selection changed to: {voice}")
+        self.tts_adapter.set_voice(voice)
+    
+    def test_voice(self):
+        """Test the selected voice"""
+        if self.tts_adapter.is_speaking:
+            logger.warning("Already speaking, ignoring test request")
+            return
+        
+        self.tts_adapter.speak("This is a test of the selected voice. Hello, I am Goose!")
     
     def update_audio_level(self, level):
         """Update the audio level visualization."""
@@ -630,6 +917,18 @@ class PyQtSpeechUI(QMainWindow):
         else:
             self.start_listening()
     
+    def on_speaking_started(self):
+        """Called when speaking starts."""
+        self.status_label.setText("Speaking...")
+        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
+        self.speak_button.setEnabled(False)
+    
+    def on_speaking_finished(self):
+        """Called when speaking finishes."""
+        self.status_label.setText("Ready")
+        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
+        self.speak_button.setEnabled(True)
+    
     def check_for_commands(self):
         """Check for commands from the server."""
         if os.path.exists(COMMAND_FILE):
@@ -668,25 +967,12 @@ class PyQtSpeechUI(QMainWindow):
                 except Exception as e:
                     logger.warning(f"Error removing response file: {e}")
                 
-                # Update UI to show speaking state
-                self.status_label.setText("Speaking...")
-                self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
-                
-                # In Phase 2, we're not implementing TTS directly in the UI
-                # This would be handled by the server component
-                # Just update the UI to reflect the speaking state
-                
-                # Simulate speaking with a timer
-                speaking_duration = len(response) * 0.05  # 50ms per character
-                QTimer.singleShot(int(speaking_duration * 1000), self.speaking_finished)
+                # Speak the response using the TTS adapter
+                if response:
+                    self.tts_adapter.speak(response)
                 
             except Exception as e:
                 logger.error(f"Error processing response file: {e}")
-    
-    def speaking_finished(self):
-        """Called when speaking is finished."""
-        self.status_label.setText("Ready")
-        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
     
     def closeEvent(self, event):
         """Handle window close event."""
