@@ -152,37 +152,43 @@ class KokoroTTS:
                 print(f"Using Kokoro voice: {self.voice}")
                 
                 # Generate audio using Kokoro
-                generator = self.pipeline(
-                    text, voice=self.voice,
-                    speed=self.speed
-                )
-                
-                # Process each segment
-                for i, (gs, ps, audio) in enumerate(generator):
-                    # Save audio to a temporary file
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                        temp_audio_path = temp_audio.name
-                        
-                        # Save audio data to file
-                        import soundfile as sf
-                        sf.write(temp_audio_path, audio, 24000)
-                        
-                        # Play audio using a system command
-                        if sys.platform == "darwin":  # macOS
-                            os.system(f"afplay {temp_audio_path}")
-                        elif sys.platform == "win32":  # Windows
-                            os.system(f"start /min powershell -c (New-Object Media.SoundPlayer '{temp_audio_path}').PlaySync()")
-                        else:  # Linux and others
-                            os.system(f"aplay {temp_audio_path}")
-                        
-                        # Clean up
-                        try:
-                            os.unlink(temp_audio_path)
-                        except:
-                            pass
-                
-                logger.info("Kokoro TTS completed successfully")
-                return True
+                try:
+                    generator = self.pipeline(
+                        text, voice=self.voice,
+                        speed=self.speed
+                    )
+                    
+                    # Process each segment
+                    for i, (gs, ps, audio) in enumerate(generator):
+                        # Save audio to a temporary file
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+                            temp_audio_path = temp_audio.name
+                            
+                            # Save audio data to file
+                            import soundfile as sf
+                            sf.write(temp_audio_path, audio, 24000)
+                            
+                            # Play audio using a system command
+                            if sys.platform == "darwin":  # macOS
+                                os.system(f"afplay {temp_audio_path}")
+                            elif sys.platform == "win32":  # Windows
+                                os.system(f"start /min powershell -c (New-Object Media.SoundPlayer '{temp_audio_path}').PlaySync()")
+                            else:  # Linux and others
+                                os.system(f"aplay {temp_audio_path}")
+                            
+                            # Clean up
+                            try:
+                                os.unlink(temp_audio_path)
+                            except:
+                                pass
+                    
+                    logger.info("Kokoro TTS completed successfully")
+                    return True
+                except Exception as e:
+                    logger.error(f"Error in Kokoro pipeline: {e}", exc_info=True)
+                    print(f"Error in Kokoro pipeline: {e}")
+                    # Fall back to pyttsx3
+                    raise
             except Exception as e:
                 logger.error(f"Error using Kokoro for TTS: {e}")
                 print(f"Error using Kokoro for TTS: {e}")

@@ -365,7 +365,7 @@ def record_audio():
         audio_frames = []
         silence_threshold = 0.008  # Reduced threshold to be more sensitive to quiet speech
         silence_duration = 0
-        max_silence = 5.0  # 5 seconds of silence to stop recording (increased from 1.5s)
+        max_silence = 2.0  # 2 seconds of silence to stop recording
         check_interval = 0.1
         
         # Record until silence is detected

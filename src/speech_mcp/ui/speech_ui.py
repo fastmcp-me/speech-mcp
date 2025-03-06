@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
     QWidget, QLabel, QPushButton, QProgressBar, QComboBox
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, QRectF
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont
 
 # Setup logging
@@ -162,35 +162,58 @@ class TTSAdapter(QObject):
             logger.warning("Already speaking, ignoring new request")
             return False
         
+        logger.info(f"TTSAdapter.speak called with text: {text[:50]}{'...' if len(text) > 50 else ''}")
+        print(f"TTSAdapter.speak called with text: {text[:50]}{'...' if len(text) > 50 else ''}")
+        
         self.is_speaking = True
         self.speaking_started.emit()
         
         # Start speaking in a separate thread
         threading.Thread(target=self._speak_thread, args=(text,), daemon=True).start()
+        logger.info("Started _speak_thread")
         return True
     
     def _speak_thread(self, text):
         """Thread function for speaking text"""
         try:
-            logger.info(f"Speaking text ({len(text)} chars): {text[:100]}{'...' if len(text) > 100 else ''}")
+            logger.info(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            print(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
             
             # Use the appropriate TTS engine
             if hasattr(self.tts_engine, 'speak'):
                 # This is the Kokoro adapter
-                result = self.tts_engine.speak(text)
-                if not result:
-                    logger.error("Kokoro TTS failed")
+                logger.info("Using Kokoro adapter speak method")
+                print("Using Kokoro adapter speak method")
+                try:
+                    result = self.tts_engine.speak(text)
+                    logger.info(f"Kokoro speak result: {result}")
+                    print(f"Kokoro speak result: {result}")
+                    if not result:
+                        logger.error("Kokoro TTS failed")
+                        print("Kokoro TTS failed")
+                except Exception as e:
+                    logger.error(f"Exception in Kokoro speak: {e}", exc_info=True)
+                    print(f"Exception in Kokoro speak: {e}")
+                    result = False
             else:
                 # This is pyttsx3
+                logger.info("Using pyttsx3 say method")
+                print("Using pyttsx3 say method")
                 self.tts_engine.say(text)
                 self.tts_engine.runAndWait()
+                logger.info("pyttsx3 speech completed")
+                print("pyttsx3 speech completed")
             
             logger.info("Speech completed")
+            print("Speech completed")
         except Exception as e:
-            logger.error(f"Error during text-to-speech: {e}")
+            logger.error(f"Error during text-to-speech: {e}", exc_info=True)
+            print(f"Error during text-to-speech: {e}")
         finally:
             self.is_speaking = False
             self.speaking_finished.emit()
+            logger.info("Speaking finished signal emitted")
+            print("Speaking finished signal emitted")
     
     def set_voice(self, voice_id):
         """Set the voice to use for TTS"""
@@ -465,8 +488,17 @@ class AudioProcessor(QObject):
             # Take absolute value to get amplitude
             amplitude = np.abs(normalized).mean()
             
-            # Emit the signal with the amplitude
-            self.audio_level_updated.emit(amplitude)
+            # Apply amplification factor to make the visualization more prominent
+            # Increase the factor from 1.0 to 5.0 to make the visualization more visible
+            amplification_factor = 5.0
+            amplified_amplitude = min(amplitude * amplification_factor, 1.0)  # Clamp to 1.0 max
+            
+            # Log the original and amplified values occasionally for debugging
+            if np.random.random() < 0.01:  # Log roughly 1% of values to avoid flooding logs
+                logger.debug(f"Audio amplitude: original={amplitude:.6f}, amplified={amplified_amplitude:.6f}")
+            
+            # Emit the signal with the amplified amplitude
+            self.audio_level_updated.emit(amplified_amplitude)
             
         except Exception as e:
             logger.error(f"Error processing audio for visualization: {e}")
@@ -481,7 +513,7 @@ class AudioProcessor(QObject):
             # Adjusted silence detection parameters for longer pauses
             silence_threshold = 0.008  # Reduced threshold to be more sensitive to quiet speech
             silence_duration = 0
-            max_silence = 5.0  # 5 seconds of silence to stop recording
+            max_silence = 2.0  # 2 seconds of silence to stop recording
             check_interval = 0.1  # Check every 100ms
             
             logger.debug(f"Silence detection parameters: threshold={silence_threshold}, max_silence={max_silence}s, check_interval={check_interval}s")
@@ -636,14 +668,28 @@ class AudioVisualizer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(100)
-        self.audio_levels = [0.0] * 100  # Store recent audio levels
+        self.audio_levels = [0.0] * 50  # Store recent audio levels (reduced from 100 for center-rising visualization)
         self.setStyleSheet("background-color: #1e1e1e;")
+        
+        # Add a smoothing factor to make the visualization less jumpy
+        self.smoothing_factor = 0.3
+        self.last_level = 0.0
+        
+        # Timer for animation
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self.update)
+        self.animation_timer.start(30)  # Update at ~30fps
     
     def update_level(self, level):
         """Update with a new audio level."""
+        # Apply smoothing to avoid abrupt changes
+        smoothed_level = (level * (1.0 - self.smoothing_factor)) + (self.last_level * self.smoothing_factor)
+        self.last_level = smoothed_level
+        
+        # For center-rising visualization, we just need to update the current level
+        # We'll shift all values in paintEvent
         self.audio_levels.pop(0)
-        self.audio_levels.append(level)
-        self.update()
+        self.audio_levels.append(smoothed_level)
     
     def paintEvent(self, event):
         """Draw the audio visualization."""
@@ -663,20 +709,175 @@ class AudioVisualizer(QWidget):
         pen.setWidth(2)
         painter.setPen(pen)
         
-        # Draw the waveform lines
-        points_per_segment = width / (len(self.audio_levels) - 1)
-        for i in range(len(self.audio_levels) - 1):
-            x1 = i * points_per_segment
-            y1 = mid_height - (self.audio_levels[i] * mid_height)
-            x2 = (i + 1) * points_per_segment
-            y2 = mid_height - (self.audio_levels[i + 1] * mid_height)
+        # Draw the center-rising waveform
+        # We'll draw bars at different positions with heights based on audio levels
+        bar_count = 40  # Number of bars to draw
+        bar_width = width / bar_count
+        bar_spacing = 2  # Pixels between bars
+        
+        for i in range(bar_count):
+            # Calculate the position in the audio_levels array
+            # Center bars use the most recent values
+            if i < len(self.audio_levels):
+                # For bars in the middle, use the most recent levels
+                level_idx = len(self.audio_levels) - 1 - i
+                if level_idx >= 0:
+                    level = self.audio_levels[level_idx]
+                else:
+                    level = 0.0
+            else:
+                level = 0.0
+                
+            # Calculate bar height based on level
+            bar_height = level * mid_height * 0.95
             
-            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+            # Calculate x position (centered)
+            x = (width / 2) + (i * bar_width / 2) - (bar_width / 2)
+            x_mirror = (width / 2) - (i * bar_width / 2) - (bar_width / 2)
             
-            # Mirror the waveform
-            y1_mirror = mid_height + (self.audio_levels[i] * mid_height)
-            y2_mirror = mid_height + (self.audio_levels[i + 1] * mid_height)
-            painter.drawLine(int(x1), int(y1_mirror), int(x2), int(y2_mirror))
+            # Draw the bar (right side)
+            if i < bar_count / 2:
+                rect = QRectF(x, mid_height - bar_height, bar_width - bar_spacing, bar_height * 2)
+                painter.fillRect(rect, QColor(0, 200, 255, 180 - i * 3))
+            
+            # Draw the mirrored bar (left side)
+            if i < bar_count / 2:
+                rect_mirror = QRectF(x_mirror, mid_height - bar_height, bar_width - bar_spacing, bar_height * 2)
+                painter.fillRect(rect_mirror, QColor(0, 200, 255, 180 - i * 3))
+        
+        # Draw a thin center line
+        painter.setPen(QPen(QColor(100, 100, 100, 100)))
+        painter.drawLine(0, int(mid_height), width, int(mid_height))
+
+
+class AnimatedButton(QPushButton):
+    """
+    Custom button class with press animation effect.
+    """
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setFlat(False)
+        self.original_style = ""
+        self.animation_timer = None
+        self.animation_step = 0
+        self.animation_steps = 10
+        self.animation_direction = 1  # 1 for pressing, -1 for releasing
+        self.is_animating = False
+        
+    def set_style(self, style):
+        """Set the button's base style"""
+        self.original_style = style
+        self.setStyleSheet(style)
+        
+    def mousePressEvent(self, event):
+        """Handle mouse press event with animation"""
+        if self.animation_timer is not None:
+            self.animation_timer.stop()
+            
+        self.animation_step = 0
+        self.animation_direction = 1
+        self.is_animating = True
+        
+        # Start animation timer
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self.animate_press)
+        self.animation_timer.start(20)  # 20ms per frame
+        
+        # Call parent handler
+        super().mousePressEvent(event)
+        
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release event with animation"""
+        if self.animation_timer is not None:
+            self.animation_timer.stop()
+            
+        self.animation_step = self.animation_steps
+        self.animation_direction = -1
+        self.is_animating = True
+        
+        # Start animation timer
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self.animate_release)
+        self.animation_timer.start(20)  # 20ms per frame
+        
+        # Call parent handler
+        super().mouseReleaseEvent(event)
+        
+    def animate_press(self):
+        """Animate button press"""
+        if not self.is_animating:
+            return
+            
+        self.animation_step += 1
+        
+        if self.animation_step >= self.animation_steps:
+            self.animation_step = self.animation_steps
+            self.animation_timer.stop()
+            
+        # Calculate animation progress (0.0 to 1.0)
+        progress = self.animation_step / self.animation_steps
+        
+        # Apply visual changes based on progress
+        self._apply_animation_style(progress)
+        
+    def animate_release(self):
+        """Animate button release"""
+        if not self.is_animating:
+            return
+            
+        self.animation_step -= 1
+        
+        if self.animation_step <= 0:
+            self.animation_step = 0
+            self.animation_timer.stop()
+            self.is_animating = False
+            self.setStyleSheet(self.original_style)
+            return
+            
+        # Calculate animation progress (1.0 to 0.0)
+        progress = self.animation_step / self.animation_steps
+        
+        # Apply visual changes based on progress
+        self._apply_animation_style(progress)
+        
+    def _apply_animation_style(self, progress):
+        """Apply animation style based on progress (0.0 to 1.0)"""
+        if not self.original_style:
+            return
+            
+        # Extract background color from original style
+        bg_color = None
+        for style_part in self.original_style.split(";"):
+            if "background-color:" in style_part:
+                bg_color = style_part.split(":")[1].strip()
+                break
+                
+        if not bg_color:
+            return
+            
+        # Parse color
+        if bg_color.startswith("#"):
+            # Hex color
+            r = int(bg_color[1:3], 16)
+            g = int(bg_color[3:5], 16)
+            b = int(bg_color[5:7], 16)
+            
+            # Darken for press effect (reduce by up to 30%)
+            darken_factor = 0.7 + (0.3 * (1.0 - progress))
+            r = max(0, int(r * darken_factor))
+            g = max(0, int(g * darken_factor))
+            b = max(0, int(b * darken_factor))
+            
+            # Create new style with darkened color
+            new_bg_color = f"#{r:02x}{g:02x}{b:02x}"
+            new_style = self.original_style.replace(bg_color, new_bg_color)
+            
+            # Add slight inset shadow effect
+            shadow_strength = int(progress * 5)
+            if shadow_strength > 0:
+                new_style += f"; border: none; border-radius: 5px; padding: 8px 16px; font-weight: bold; margin: {shadow_strength}px 0px 0px 0px;"
+                
+            self.setStyleSheet(new_style)
 
 
 class PyQtSpeechUI(QMainWindow):
@@ -783,11 +984,12 @@ class PyQtSpeechUI(QMainWindow):
         # Control buttons
         button_layout = QHBoxLayout()
         
-        self.listen_button = QPushButton("Listen")
+        # Add Listen button
+        self.listen_button = AnimatedButton("Start Listening")
         self.listen_button.clicked.connect(self.toggle_listening)
-        self.listen_button.setEnabled(False)  # Disabled until components are ready
-        self.listen_button.setStyleSheet("""
-            background-color: #00a0e9;
+        self.listen_button.setEnabled(True)  # Enable the button
+        self.listen_button.set_style("""
+            background-color: #3498db;
             color: white;
             border: none;
             border-radius: 5px;
@@ -795,10 +997,11 @@ class PyQtSpeechUI(QMainWindow):
             font-weight: bold;
         """)
         
-        self.speak_button = QPushButton("Test Voice")
+        # Use AnimatedButton for Test Voice button
+        self.speak_button = AnimatedButton("Test Voice")
         self.speak_button.clicked.connect(self.test_voice)
-        self.speak_button.setEnabled(False)  # Disabled until components are ready
-        self.speak_button.setStyleSheet("""
+        self.speak_button.setEnabled(True)  # Enable the button
+        self.speak_button.set_style("""
             background-color: #27ae60;
             color: white;
             border: none;
@@ -807,9 +1010,10 @@ class PyQtSpeechUI(QMainWindow):
             font-weight: bold;
         """)
         
-        self.close_button = QPushButton("Close")
+        # Use AnimatedButton for Close button
+        self.close_button = AnimatedButton("Close")
         self.close_button.clicked.connect(self.close)
-        self.close_button.setStyleSheet("""
+        self.close_button.set_style("""
             background-color: #e74c3c;
             color: white;
             border: none;
@@ -936,12 +1140,17 @@ class PyQtSpeechUI(QMainWindow):
     def on_components_ready(self):
         """Called when all components are ready"""
         logger.info("All components are ready, updating UI")
+        
+        # Update status label
         self.status_label.setText("Ready")
         self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
         
-        # Enable buttons that require components to be ready
-        self.speak_button.setEnabled(True)
-        self.listen_button.setEnabled(True)
+        # Clear initialization message from transcription label
+        if self.transcription_label.text().startswith("Initializing"):
+            self.transcription_label.setText("Ready for voice interaction")
+        
+        # Check if there's a saved voice preference
+        self.check_voice_preference()
         
         # Check for any pending commands
         if os.path.exists(COMMAND_FILE):
@@ -949,9 +1158,50 @@ class PyQtSpeechUI(QMainWindow):
                 with open(COMMAND_FILE, 'r') as f:
                     command = f.read().strip()
                     if command == "LISTEN":
-                        self.start_listening()
+                        # Only start listening if we have a saved voice preference
+                        if self.has_saved_voice_preference():
+                            self.start_listening()
+                        else:
+                            logger.info("Ignoring LISTEN command because no voice preference is saved")
             except Exception as e:
                 logger.error(f"Error reading command file: {e}")
+    
+    def has_saved_voice_preference(self):
+        """Check if there's a saved voice preference"""
+        try:
+            # Check if we have a config module
+            if importlib.util.find_spec("speech_mcp.config") is not None:
+                from speech_mcp.config import get_setting, get_env_setting
+                
+                # Check environment variable
+                env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+                if env_voice:
+                    return True
+                
+                # Check config file
+                config_voice = get_setting("tts", "voice", None)
+                if config_voice:
+                    return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"Error checking for saved voice preference: {e}")
+            return False
+    
+    def check_voice_preference(self):
+        """Check if there's a saved voice preference and play guidance if not"""
+        if not self.has_saved_voice_preference():
+            logger.info("No saved voice preference found, playing guidance message")
+            self.transcription_label.setText("Please select a voice from the dropdown and click 'Test Voice' to hear it.")
+            
+            # Wait a moment before speaking to ensure UI is fully ready
+            QTimer.singleShot(500, self.play_guidance_message)
+    
+    def play_guidance_message(self):
+        """Play a guidance message for first-time users"""
+        if hasattr(self, 'tts_adapter') and self.tts_adapter:
+            self.tts_adapter.speak("This is the default voice. Please select a voice from the dropdown menu and click Test Voice to hear it.")
+            logger.info("Played guidance message for first-time user")
     
     
     def on_voice_changed(self, index):
@@ -972,17 +1222,49 @@ class PyQtSpeechUI(QMainWindow):
     
     def test_voice(self):
         """Test the selected voice"""
+        print("Test voice button clicked!")
+        logger.info("Test voice button clicked!")
+        
         # Skip if TTS adapter is not ready yet
         if not hasattr(self, 'tts_adapter') or not self.tts_adapter:
+            logger.warning("Test voice button clicked but TTS not ready yet")
             self.status_label.setText("TTS not ready yet")
+            self.transcription_label.setText("TTS not ready yet. Please wait...")
             QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
             return
             
+        logger.info(f"TTS adapter exists: {self.tts_adapter is not None}")
+        logger.info(f"TTS engine exists: {self.tts_adapter.tts_engine is not None}")
+        logger.info(f"Is speaking: {self.tts_adapter.is_speaking}")
+        
         if self.tts_adapter.is_speaking:
             logger.warning("Already speaking, ignoring test request")
             return
         
-        self.tts_adapter.speak("This is a test of the selected voice. Hello, I am Goose!")
+        # Update the transcription label to show we're testing the voice
+        self.transcription_label.setText("Testing voice...")
+        
+        # Log the current voice being tested
+        current_voice = self.tts_adapter.get_current_voice()
+        logger.info(f"Testing voice: {current_voice}")
+        print(f"Testing voice: {current_voice}")
+        
+        # Speak a test message
+        try:
+            logger.info("Attempting to speak test message")
+            result = self.tts_adapter.speak("This is a test of the selected voice. Hello, I am Goose!")
+            logger.info(f"TTS speak result: {result}")
+            print(f"TTS speak result: {result}")
+            
+            if not result:
+                logger.error("Failed to start speaking test message")
+                self.transcription_label.setText("Error: Failed to test voice")
+                QTimer.singleShot(2000, lambda: self.transcription_label.setText("Select a voice and click 'Test Voice' to hear it"))
+        except Exception as e:
+            logger.error(f"Exception during test voice: {e}", exc_info=True)
+            print(f"Exception during test voice: {e}")
+            self.transcription_label.setText(f"Error: {str(e)}")
+            QTimer.singleShot(3000, lambda: self.transcription_label.setText("Select a voice and click 'Test Voice' to hear it"))
     
     def update_audio_level(self, level):
         """Update the audio level visualization."""
@@ -1004,15 +1286,6 @@ class PyQtSpeechUI(QMainWindow):
         self.audio_processor.start_listening()
         self.status_label.setText("Listening...")
         self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #00c8ff;")
-        self.listen_button.setText("Stop")
-        self.listen_button.setStyleSheet("""
-            background-color: #e74c3c;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 8px 16px;
-            font-weight: bold;
-        """)
     
     def stop_listening(self):
         """Stop listening mode."""
@@ -1023,21 +1296,14 @@ class PyQtSpeechUI(QMainWindow):
         self.audio_processor.stop_listening()
         self.status_label.setText("Not Listening")
         self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
-        self.listen_button.setText("Listen")
-        self.listen_button.setStyleSheet("""
-            background-color: #00a0e9;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 8px 16px;
-            font-weight: bold;
-        """)
     
     def toggle_listening(self):
         """Toggle between listening and not listening states."""
         # Skip if audio processor is not ready yet
         if not hasattr(self, 'audio_processor') or not self.audio_processor:
+            logger.warning("Listen button clicked but audio processor not ready yet")
             self.status_label.setText("Speech recognition not ready yet")
+            self.transcription_label.setText("Speech recognition not ready yet. Please wait...")
             QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
             return
             
@@ -1051,7 +1317,7 @@ class PyQtSpeechUI(QMainWindow):
         self.status_label.setText("Speaking...")
         self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
         self.speak_button.setEnabled(False)
-    
+        
     def on_speaking_finished(self):
         """Called when speaking finishes."""
         self.status_label.setText("Ready")
@@ -1073,7 +1339,15 @@ class PyQtSpeechUI(QMainWindow):
                         logger.info("Components not ready yet, will process LISTEN command when ready")
                         # Command will be processed in on_components_ready
                         return
-                    self.start_listening()
+                    
+                    # Only start listening if we have a saved voice preference
+                    if self.has_saved_voice_preference():
+                        self.start_listening()
+                    else:
+                        logger.info("Ignoring LISTEN command because no voice preference is saved")
+                        # Play guidance message instead
+                        self.check_voice_preference()
+                        
                 elif command == "IDLE" and hasattr(self, 'audio_processor') and self.audio_processor and self.audio_processor.is_listening:
                     logger.info("Received IDLE command")
                     self.stop_listening()
