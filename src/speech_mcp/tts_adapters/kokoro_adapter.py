@@ -195,11 +195,45 @@ class KokoroTTS:
         # Get Kokoro voices if available
         if self.kokoro_available and self.pipeline is not None:
             try:
-                # Kokoro doesn't have a direct API to get voices, so we'll list the common ones
+                # List of available Kokoro voice models
                 voices = [
-                    "af_heart", "af_chill", "af_robot", "af_bright", "af_serious",
-                    "am_casual", "am_calm", "am_serious", "am_happy"
+                    # American Female voices
+                    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", 
+                    "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+                    
+                    # American Male voices
+                    "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", 
+                    "am_michael", "am_onyx", "am_puck", "am_santa",
+                    
+                    # British Female voices
+                    "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+                    
+                    # British Male voices
+                    "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
+                    
+                    # Other English voices
+                    "ef_dora", "em_alex", "em_santa",
+                    
+                    # French voice
+                    "ff_siwis",
+                    
+                    # Hindi voices
+                    "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
+                    
+                    # Italian voices
+                    "if_sara", "im_nicola",
+                    
+                    # Japanese voices
+                    "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
+                    
+                    # Portuguese voices
+                    "pf_dora", "pm_alex", "pm_santa",
+                    
+                    # Chinese voices
+                    "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
+                    "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang"
                 ]
+                
                 logger.info(f"Found {len(voices)} Kokoro voices")
                 print(f"Found {len(voices)} Kokoro voices")
                 

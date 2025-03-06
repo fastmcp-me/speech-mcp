@@ -76,11 +76,12 @@ class TTSAdapter(QObject):
                     self.tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
                     logger.info("Kokoro TTS adapter initialized successfully")
                     
-                    # Get available voices
-                    self.available_voices = self.tts_engine.get_available_voices()
-                    self.current_voice = "af_heart"
-                    logger.debug(f"Available Kokoro TTS voices: {len(self.available_voices)}")
-                    for i, voice in enumerate(self.available_voices):
+                    # List of available Kokoro voice models
+                    voices = self.tts_engine.get_available_voices()
+                    self.available_voices = voices
+                    self.current_voice = "af_heart"  # Default to af_heart
+                    logger.debug(f"Available Kokoro TTS voices: {len(voices)}")
+                    for i, voice in enumerate(voices):
                         logger.debug(f"Voice {i}: {voice}")
                     
                     return True
