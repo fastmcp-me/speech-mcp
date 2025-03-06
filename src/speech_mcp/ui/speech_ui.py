@@ -18,8 +18,8 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
     QWidget, QLabel, QPushButton, QProgressBar, QComboBox
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, QRectF
-from PyQt5.QtGui import QPainter, QColor, QPen, QFont
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, QRectF, Q_ARG
+from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QLinearGradient
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ class TTSAdapter(QObject):
     speaking_finished = pyqtSignal()
     speaking_started = pyqtSignal()
     speaking_progress = pyqtSignal(float)  # Progress between 0.0 and 1.0
+    audio_level = pyqtSignal(float)  # Audio level for visualization
     
     def __init__(self):
         super().__init__()
@@ -173,11 +174,72 @@ class TTSAdapter(QObject):
         logger.info("Started _speak_thread")
         return True
     
+    def emit_audio_level(self):
+        """Emit simulated audio levels for visualization during speech"""
+        if not self.is_speaking:
+            self.audio_level_timer.stop()
+            self.audio_level.emit(0.0)  # Reset to zero when not speaking
+            return
+        
+        # Check if we have a speech pattern
+        if hasattr(self, 'speech_pattern') and self.speech_pattern:
+            # Get current pattern element
+            if self.pattern_index < len(self.speech_pattern):
+                level, duration = self.speech_pattern[self.pattern_index]
+                
+                # Add some randomness for natural variation
+                import random
+                import math
+                
+                # Add slight variation to make it more natural
+                t = time.time() * 8.0
+                variation = 0.1 * math.sin(t) + 0.05 * random.random()
+                level = max(0.1, min(0.95, level + variation))
+                
+                # Emit the level
+                self.audio_level.emit(level)
+                
+                # Decrement duration counter
+                if hasattr(self, 'duration_counter'):
+                    self.duration_counter -= 1
+                else:
+                    self.duration_counter = duration
+                
+                # Move to next pattern element when duration is complete
+                if self.duration_counter <= 0:
+                    self.pattern_index += 1
+                    if self.pattern_index < len(self.speech_pattern):
+                        self.duration_counter = self.speech_pattern[self.pattern_index][1]
+            else:
+                # Loop back to beginning if we've reached the end
+                self.pattern_index = 0
+                if self.speech_pattern:
+                    self.duration_counter = self.speech_pattern[0][1]
+        else:
+            # Fallback to random pattern if no speech pattern available
+            import random
+            import math
+            
+            t = time.time() * 5.0
+            base_level = 0.5 + 0.2 * math.sin(t * 1.5)
+            variation = 0.3 + 0.15 * math.sin(t * 3.7)
+            level = base_level + random.random() * variation
+            level = max(0.1, min(0.95, level))
+            
+            self.audio_level.emit(level)
+    
     def _speak_thread(self, text):
         """Thread function for speaking text"""
         try:
             logger.info(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
             print(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            
+            # Generate a speech pattern based on the text
+            # This will create more realistic visualization that matches the speech
+            self.generate_speech_pattern(text)
+            
+            # Signal to the main thread to start visualization
+            self.speaking_started.emit()
             
             # Use the appropriate TTS engine
             if hasattr(self.tts_engine, 'speak'):
@@ -214,6 +276,61 @@ class TTSAdapter(QObject):
             self.speaking_finished.emit()
             logger.info("Speaking finished signal emitted")
             print("Speaking finished signal emitted")
+    
+    def generate_speech_pattern(self, text):
+        """Generate a speech pattern based on the text content"""
+        import re
+        
+        # Initialize speech pattern
+        self.speech_pattern = []
+        self.pattern_index = 0
+        
+        # Split text into sentences
+        sentences = re.split(r'[.!?]+', text)
+        
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+                
+            # Split sentence into words
+            words = sentence.strip().split()
+            
+            # Start with medium level
+            self.speech_pattern.append((0.5, 3))  # (level, duration in frames)
+            
+            for word in words:
+                # Word length affects amplitude
+                word_len = len(word)
+                
+                if word_len <= 2:  # Short words
+                    level = 0.3 + 0.1 * word_len
+                    duration = 2
+                elif word_len <= 5:  # Medium words
+                    level = 0.5 + 0.05 * word_len
+                    duration = 3
+                else:  # Long words
+                    level = 0.7 + 0.02 * min(word_len, 15)  # Cap at 15 chars
+                    duration = 4 + min(word_len // 3, 4)  # Longer duration for longer words
+                
+                # Add emphasis for capitalized words
+                if word[0].isupper() and len(word) > 1:
+                    level = min(level * 1.2, 0.95)
+                
+                # Add the word's pattern
+                self.speech_pattern.append((level, duration))
+                
+                # Add a brief pause between words
+                self.speech_pattern.append((0.2, 1))
+            
+            # Add longer pause at end of sentence
+            self.speech_pattern.append((0.1, 5))
+        
+        # Add final trailing off
+        self.speech_pattern.append((0.3, 2))
+        self.speech_pattern.append((0.2, 2))
+        self.speech_pattern.append((0.1, 2))
+        
+        logger.debug(f"Generated speech pattern with {len(self.speech_pattern)} elements")
     
     def set_voice(self, voice_id):
         """Set the voice to use for TTS"""
@@ -665,11 +782,34 @@ class AudioVisualizer(QWidget):
     """
     Widget for visualizing audio levels and waveforms.
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, mode="user", width_factor=1.0):
+        """
+        Initialize the audio visualizer.
+        
+        Args:
+            parent: Parent widget
+            mode: "user" or "agent" to determine color scheme
+            width_factor: Factor to adjust the width of bars (1.0 = full width, 0.5 = half width)
+        """
         super().__init__(parent)
         self.setMinimumHeight(100)
-        self.audio_levels = [0.0] * 50  # Store recent audio levels (reduced from 100 for center-rising visualization)
+        self.audio_levels = [0.0] * 50  # Store recent audio levels
         self.setStyleSheet("background-color: #1e1e1e;")
+        self.mode = mode
+        self.width_factor = width_factor
+        self.active = False  # Track if visualizer is active
+        
+        # Set colors based on mode
+        if self.mode == "user":
+            self.bar_color = QColor(0, 200, 255, 180)  # Blue for user
+            self.glow_color = QColor(0, 120, 255, 80)  # Softer blue glow
+        else:
+            self.bar_color = QColor(0, 255, 100, 200)  # Brighter green for agent
+            self.glow_color = QColor(0, 220, 100, 100)  # Stronger green glow
+            
+        # Inactive colors (grey)
+        self.inactive_bar_color = QColor(100, 100, 100, 120)  # Grey for inactive
+        self.inactive_glow_color = QColor(80, 80, 80, 60)  # Softer grey glow
         
         # Add a smoothing factor to make the visualization less jumpy
         self.smoothing_factor = 0.3
@@ -679,6 +819,14 @@ class AudioVisualizer(QWidget):
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self.update)
         self.animation_timer.start(30)  # Update at ~30fps
+        
+        # Animation time for dynamic effects
+        self.animation_time = 0.0
+    
+    def set_active(self, active):
+        """Set the visualizer as active or inactive."""
+        self.active = active
+        self.update()
     
     def update_level(self, level):
         """Update with a new audio level."""
@@ -690,6 +838,9 @@ class AudioVisualizer(QWidget):
         # We'll shift all values in paintEvent
         self.audio_levels.pop(0)
         self.audio_levels.append(smoothed_level)
+        
+        # Update animation time
+        self.animation_time += 0.1
     
     def paintEvent(self, event):
         """Draw the audio visualization."""
@@ -704,16 +855,28 @@ class AudioVisualizer(QWidget):
         height = self.height()
         mid_height = height / 2
         
+        # Choose colors based on active state
+        if self.active:
+            bar_color = self.bar_color
+            glow_color = self.glow_color
+        else:
+            bar_color = self.inactive_bar_color
+            glow_color = self.inactive_glow_color
+        
         # Set pen for waveform
-        pen = QPen(QColor(0, 200, 255, 180))
+        pen = QPen(bar_color)
         pen.setWidth(2)
         painter.setPen(pen)
         
         # Draw the center-rising waveform
         # We'll draw bars at different positions with heights based on audio levels
         bar_count = 40  # Number of bars to draw
-        bar_width = width / bar_count
+        bar_width = (width / bar_count) * self.width_factor
         bar_spacing = 2  # Pixels between bars
+        
+        # Calculate animation phase for dynamic effects
+        import math
+        phase = self.animation_time % (2 * math.pi)
         
         for i in range(bar_count):
             # Calculate the position in the audio_levels array
@@ -728,6 +891,14 @@ class AudioVisualizer(QWidget):
             else:
                 level = 0.0
                 
+            # If inactive, flatten the visualization
+            if not self.active:
+                level = level * 0.2  # Reduce height significantly when inactive
+                
+            # Add subtle wave effect to make visualization more dynamic
+            wave_effect = 0.05 * math.sin(phase + i * 0.2)
+            level = max(0.0, min(1.0, level + wave_effect))
+            
             # Calculate bar height based on level
             bar_height = level * mid_height * 0.95
             
@@ -737,16 +908,61 @@ class AudioVisualizer(QWidget):
             
             # Draw the bar (right side)
             if i < bar_count / 2:
+                # Draw glow effect first (larger, more transparent)
+                glow_rect = QRectF(
+                    x - bar_width * 0.2, 
+                    mid_height - bar_height * 1.1, 
+                    (bar_width - bar_spacing) * 1.4, 
+                    bar_height * 2.2
+                )
+                painter.fillRect(glow_rect, QColor(
+                    glow_color.red(), 
+                    glow_color.green(), 
+                    glow_color.blue(), 
+                    80 - i * 2
+                ))
+                
+                # Draw the main bar
                 rect = QRectF(x, mid_height - bar_height, bar_width - bar_spacing, bar_height * 2)
-                painter.fillRect(rect, QColor(0, 200, 255, 180 - i * 3))
+                painter.fillRect(rect, QColor(
+                    bar_color.red(), 
+                    bar_color.green(), 
+                    bar_color.blue(), 
+                    180 - i * 3
+                ))
             
             # Draw the mirrored bar (left side)
             if i < bar_count / 2:
+                # Draw glow effect first
+                glow_rect_mirror = QRectF(
+                    x_mirror - bar_width * 0.2, 
+                    mid_height - bar_height * 1.1, 
+                    (bar_width - bar_spacing) * 1.4, 
+                    bar_height * 2.2
+                )
+                painter.fillRect(glow_rect_mirror, QColor(
+                    glow_color.red(), 
+                    glow_color.green(), 
+                    glow_color.blue(), 
+                    80 - i * 2
+                ))
+                
+                # Draw the main bar
                 rect_mirror = QRectF(x_mirror, mid_height - bar_height, bar_width - bar_spacing, bar_height * 2)
-                painter.fillRect(rect_mirror, QColor(0, 200, 255, 180 - i * 3))
+                painter.fillRect(rect_mirror, QColor(
+                    bar_color.red(), 
+                    bar_color.green(), 
+                    bar_color.blue(), 
+                    180 - i * 3
+                ))
         
-        # Draw a thin center line
-        painter.setPen(QPen(QColor(100, 100, 100, 100)))
+        # Draw a thin center line with a gradient
+        gradient = QLinearGradient(0, mid_height, width, mid_height)
+        gradient.setColorAt(0, QColor(100, 100, 100, 0))
+        gradient.setColorAt(0.5, QColor(100, 100, 100, 100))
+        gradient.setColorAt(1, QColor(100, 100, 100, 0))
+        
+        painter.setPen(QPen(gradient, 1))
         painter.drawLine(0, int(mid_height), width, int(mid_height))
 
 
@@ -932,22 +1148,48 @@ class PyQtSpeechUI(QMainWindow):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(15)
         
-        # Status label - initially shows loading
-        self.status_label = QLabel("Loading...")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("""
-            font-size: 18px;
-            font-weight: bold;
-            color: #f39c12;
-        """)
-        main_layout.addWidget(self.status_label)
+        # Create a layout for the visualizer labels
+        label_layout = QHBoxLayout()
         
-        # Audio visualizer
-        self.visualizer = AudioVisualizer()
-        main_layout.addWidget(self.visualizer)
+        # User label
+        user_label = QLabel("User")
+        user_label.setAlignment(Qt.AlignCenter)
+        user_label.setStyleSheet("""
+            font-size: 14px;
+            color: #00c8ff;
+            font-weight: bold;
+        """)
+        label_layout.addWidget(user_label, 1)
+        
+        # Agent label
+        agent_label = QLabel("Agent")
+        agent_label.setAlignment(Qt.AlignCenter)
+        agent_label.setStyleSheet("""
+            font-size: 14px;
+            color: #00ff64;
+            font-weight: bold;
+        """)
+        label_layout.addWidget(agent_label, 1)
+        
+        # Add the label layout to the main layout
+        main_layout.addLayout(label_layout)
+        
+        # Create a layout for the visualizers
+        visualizer_layout = QHBoxLayout()
+        
+        # User audio visualizer (blue)
+        self.user_visualizer = AudioVisualizer(mode="user", width_factor=1.0)
+        visualizer_layout.addWidget(self.user_visualizer, 1)  # Equal ratio
+        
+        # Agent audio visualizer (green)
+        self.agent_visualizer = AudioVisualizer(mode="agent", width_factor=1.0)
+        visualizer_layout.addWidget(self.agent_visualizer, 1)  # Equal ratio
+        
+        # Add the visualizer layout to the main layout
+        main_layout.addLayout(visualizer_layout)
         
         # Transcription display
-        self.transcription_label = QLabel("Initializing speech recognition...")
+        self.transcription_label = QLabel("Ready for voice interaction")
         self.transcription_label.setAlignment(Qt.AlignCenter)
         self.transcription_label.setWordWrap(True)
         self.transcription_label.setStyleSheet("""
@@ -1040,6 +1282,18 @@ class PyQtSpeechUI(QMainWindow):
                 color: #ffffff;
             }
         """)
+        
+        # Initialize visualizers to inactive state
+        self.set_user_visualizer_active(False)
+        self.set_agent_visualizer_active(False)
+    
+    def set_user_visualizer_active(self, active):
+        """Set the user visualizer as active or inactive."""
+        self.user_visualizer.set_active(active)
+    
+    def set_agent_visualizer_active(self, active):
+        """Set the agent visualizer as active or inactive."""
+        self.agent_visualizer.set_active(active)
     
     def update_voice_list(self):
         """Update the voice selection combo box"""
@@ -1093,8 +1347,6 @@ class PyQtSpeechUI(QMainWindow):
     def initialize_components(self):
         """Initialize components in background threads"""
         logger.info("Starting background initialization of components")
-        self.status_label.setText("Loading components...")
-        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #f39c12;")
         
         # Start background threads for initialization
         threading.Thread(target=self.initialize_audio_processor, daemon=True).start()
@@ -1120,6 +1372,16 @@ class PyQtSpeechUI(QMainWindow):
             self.tts_adapter = TTSAdapter()
             self.tts_adapter.speaking_started.connect(self.on_speaking_started)
             self.tts_adapter.speaking_finished.connect(self.on_speaking_finished)
+            
+            # Connect audio level signal to agent visualizer
+            self.tts_adapter.audio_level.connect(self.update_agent_audio_level)
+            
+            # Create audio level timer if it doesn't exist yet
+            if not hasattr(self.tts_adapter, 'audio_level_timer'):
+                self.tts_adapter.audio_level_timer = QTimer()
+                self.tts_adapter.audio_level_timer.timeout.connect(self.tts_adapter.emit_audio_level)
+                logger.info("Created audio level timer for TTS visualization")
+            
             self.tts_ready = True
             logger.info("TTS adapter initialization complete")
             
@@ -1141,13 +1403,8 @@ class PyQtSpeechUI(QMainWindow):
         """Called when all components are ready"""
         logger.info("All components are ready, updating UI")
         
-        # Update status label
-        self.status_label.setText("Ready")
-        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
-        
         # Clear initialization message from transcription label
-        if self.transcription_label.text().startswith("Initializing"):
-            self.transcription_label.setText("Ready for voice interaction")
+        self.transcription_label.setText("Ready for voice interaction")
         
         # Check if there's a saved voice preference
         self.check_voice_preference()
@@ -1228,9 +1485,7 @@ class PyQtSpeechUI(QMainWindow):
         # Skip if TTS adapter is not ready yet
         if not hasattr(self, 'tts_adapter') or not self.tts_adapter:
             logger.warning("Test voice button clicked but TTS not ready yet")
-            self.status_label.setText("TTS not ready yet")
             self.transcription_label.setText("TTS not ready yet. Please wait...")
-            QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
             return
             
         logger.info(f"TTS adapter exists: {self.tts_adapter is not None}")
@@ -1249,6 +1504,16 @@ class PyQtSpeechUI(QMainWindow):
         logger.info(f"Testing voice: {current_voice}")
         print(f"Testing voice: {current_voice}")
         
+        # Start the agent animation timer before speaking
+        if not hasattr(self, 'agent_animation_timer'):
+            self.agent_animation_timer = QTimer(self)
+            self.agent_animation_timer.timeout.connect(self.animate_agent_visualizer)
+        self.agent_animation_timer.start(50)  # Update every 50ms
+        
+        # Activate agent visualizer
+        self.set_agent_visualizer_active(True)
+        self.set_user_visualizer_active(False)
+        
         # Speak a test message
         try:
             logger.info("Attempting to speak test message")
@@ -1260,32 +1525,48 @@ class PyQtSpeechUI(QMainWindow):
                 logger.error("Failed to start speaking test message")
                 self.transcription_label.setText("Error: Failed to test voice")
                 QTimer.singleShot(2000, lambda: self.transcription_label.setText("Select a voice and click 'Test Voice' to hear it"))
+                
+                # Stop the animation if speaking failed
+                if hasattr(self, 'agent_animation_timer') and self.agent_animation_timer.isActive():
+                    self.agent_animation_timer.stop()
+                    self.agent_visualizer.update_level(0.0)
         except Exception as e:
             logger.error(f"Exception during test voice: {e}", exc_info=True)
             print(f"Exception during test voice: {e}")
             self.transcription_label.setText(f"Error: {str(e)}")
             QTimer.singleShot(3000, lambda: self.transcription_label.setText("Select a voice and click 'Test Voice' to hear it"))
+            
+            # Stop the animation if an exception occurred
+            if hasattr(self, 'agent_animation_timer') and self.agent_animation_timer.isActive():
+                self.agent_animation_timer.stop()
+                self.agent_visualizer.update_level(0.0)
     
     def update_audio_level(self, level):
-        """Update the audio level visualization."""
-        self.visualizer.update_level(level)
+        """Update the user audio level visualization."""
+        self.user_visualizer.update_level(level)
+    
+    def update_agent_audio_level(self, level):
+        """Update the agent audio level visualization."""
+        self.agent_visualizer.update_level(level)
     
     def handle_transcription(self, text):
         """Handle new transcription text."""
-        self.transcription_label.setText(text)
+        self.transcription_label.setText(f"You: {text}")
         logger.info(f"New transcription: {text}")
     
     def start_listening(self):
         """Start listening mode."""
         # Skip if audio processor is not ready yet
         if not hasattr(self, 'audio_processor') or not self.audio_processor:
-            self.status_label.setText("Speech recognition not ready yet")
-            QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
+            self.transcription_label.setText("Speech recognition not ready yet")
             return
             
         self.audio_processor.start_listening()
-        self.status_label.setText("Listening...")
-        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #00c8ff;")
+        self.listen_button.setText("Stop Listening")
+        
+        # Activate user visualizer, deactivate agent visualizer
+        self.set_user_visualizer_active(True)
+        self.set_agent_visualizer_active(False)
     
     def stop_listening(self):
         """Stop listening mode."""
@@ -1294,17 +1575,17 @@ class PyQtSpeechUI(QMainWindow):
             return
             
         self.audio_processor.stop_listening()
-        self.status_label.setText("Not Listening")
-        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
+        self.listen_button.setText("Start Listening")
+        
+        # Deactivate user visualizer
+        self.set_user_visualizer_active(False)
     
     def toggle_listening(self):
         """Toggle between listening and not listening states."""
         # Skip if audio processor is not ready yet
         if not hasattr(self, 'audio_processor') or not self.audio_processor:
             logger.warning("Listen button clicked but audio processor not ready yet")
-            self.status_label.setText("Speech recognition not ready yet")
             self.transcription_label.setText("Speech recognition not ready yet. Please wait...")
-            QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
             return
             
         if self.audio_processor.is_listening:
@@ -1314,15 +1595,45 @@ class PyQtSpeechUI(QMainWindow):
     
     def on_speaking_started(self):
         """Called when speaking starts."""
-        self.status_label.setText("Speaking...")
-        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
         self.speak_button.setEnabled(False)
+        
+        # Activate agent visualizer, deactivate user visualizer
+        self.set_agent_visualizer_active(True)
+        self.set_user_visualizer_active(False)
+        
+        # Start a timer to animate the agent visualizer
+        if not hasattr(self, 'agent_animation_timer'):
+            self.agent_animation_timer = QTimer(self)
+            self.agent_animation_timer.timeout.connect(self.animate_agent_visualizer)
+        self.agent_animation_timer.start(50)  # Update every 50ms
         
     def on_speaking_finished(self):
         """Called when speaking finishes."""
-        self.status_label.setText("Ready")
-        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
         self.speak_button.setEnabled(True)
+        
+        # Stop the agent animation timer
+        if hasattr(self, 'agent_animation_timer') and self.agent_animation_timer.isActive():
+            self.agent_animation_timer.stop()
+        
+        # Deactivate agent visualizer
+        self.set_agent_visualizer_active(False)
+            
+    def animate_agent_visualizer(self):
+        """Animate the agent visualizer with dynamic levels"""
+        import random
+        import math
+        
+        # Create a dynamic wave pattern
+        t = time.time() * 5.0
+        base_level = 0.5 + 0.3 * math.sin(t * 1.5)
+        variation = 0.2 * random.random()
+        level = base_level + variation
+        
+        # Ensure level stays within bounds
+        level = max(0.1, min(0.95, level))
+        
+        # Update the agent visualizer
+        self.agent_visualizer.update_level(level)
     
     def check_for_commands(self):
         """Check for commands from the server."""
@@ -1355,8 +1666,9 @@ class PyQtSpeechUI(QMainWindow):
                     logger.info("Received SPEAK command")
                     # We'll handle speaking in check_for_responses
                     if hasattr(self, 'tts_adapter') and self.tts_adapter:
-                        self.status_label.setText("Speaking...")
-                        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
+                        # Activate agent visualizer
+                        self.set_agent_visualizer_active(True)
+                        self.set_user_visualizer_active(False)
             except Exception as e:
                 logger.error(f"Error reading command file: {e}")
     
@@ -1382,12 +1694,24 @@ class PyQtSpeechUI(QMainWindow):
                     self.transcription_label.setText("Response received but TTS not ready yet")
                     return
                 
+                # Display the response text in the transcription label
+                self.transcription_label.setText(f"Agent: {response}")
+                
+                # Start the agent animation timer before speaking
+                # This ensures the visualization works even if the TTS signal connection fails
+                if not hasattr(self, 'agent_animation_timer'):
+                    self.agent_animation_timer = QTimer(self)
+                    self.agent_animation_timer.timeout.connect(self.animate_agent_visualizer)
+                self.agent_animation_timer.start(50)  # Update every 50ms
+                
                 # Speak the response using the TTS adapter
                 if response:
                     self.tts_adapter.speak(response)
                 
             except Exception as e:
                 logger.error(f"Error processing response file: {e}")
+                self.transcription_label.setText(f"Error processing response: {str(e)}")
+                QTimer.singleShot(3000, lambda: self.transcription_label.setText("Ready for voice interaction"))
     
     def closeEvent(self, event):
         """Handle window close event."""
