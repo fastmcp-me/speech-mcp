@@ -25,10 +25,10 @@ from PyQt5.QtGui import QPainter, QColor, QPen, QFont
 logger = logging.getLogger(__name__)
 
 # Path to save speech state - same as in server.py
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "speech_state.json")
-TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "transcription.txt")
-RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "response.txt")
-COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ui_command.txt")
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_state.json")
+TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "transcription.txt")
+RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "response.txt")
+COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ui_command.txt")
 
 # Audio parameters
 CHUNK = 1024
@@ -37,7 +37,7 @@ CHANNELS = 1
 RATE = 16000
 
 # Path to audio notification files
-AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "resources", "audio")
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "audio")
 START_LISTENING_SOUND = os.path.join(AUDIO_DIR, "start_listening.wav")
 STOP_LISTENING_SOUND = os.path.join(AUDIO_DIR, "stop_listening.wav")
 
@@ -241,10 +241,10 @@ class TTSAdapter(QObject):
         return self.current_voice
 
 # Path to save speech state - same as in server.py
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "speech_state.json")
-TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "transcription.txt")
-RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "response.txt")
-COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ui_command.txt")
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_state.json")
+TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "transcription.txt")
+RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "response.txt")
+COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ui_command.txt")
 
 # Audio parameters
 CHUNK = 1024
@@ -253,7 +253,7 @@ CHANNELS = 1
 RATE = 16000
 
 # Path to audio notification files
-AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "resources", "audio")
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "audio")
 START_LISTENING_SOUND = os.path.join(AUDIO_DIR, "start_listening.wav")
 STOP_LISTENING_SOUND = os.path.join(AUDIO_DIR, "stop_listening.wav")
 

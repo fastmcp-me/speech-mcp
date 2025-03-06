@@ -273,14 +273,14 @@ def ensure_ui_is_running():
         except Exception as e:
             logger.error(f"Error checking UI process: {e}")
     
-    # Check for any existing UI processes by looking for Python processes running speech_mcp.ui.pyqt
+    # Check for any existing UI processes by looking for Python processes running speech_mcp.ui
     try:
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
                 cmdline = proc.info.get('cmdline', [])
                 if cmdline and len(cmdline) >= 3:
                     # Look specifically for PyQt UI processes
-                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui.pyqt' in cmdline[2]:
+                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
                         # Found an existing PyQt UI process
                         logger.info(f"Found existing PyQt UI process with PID {proc.info['pid']}")
                         
@@ -677,7 +677,7 @@ def launch_ui() -> str:
                 cmdline = proc.info.get('cmdline', [])
                 if cmdline and len(cmdline) >= 3:
                     # Look specifically for PyQt UI processes
-                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui.pyqt' in cmdline[2]:
+                    if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
                         # Found an existing PyQt UI process
                         logger.info(f"Found existing PyQt UI process with PID {proc.info['pid']}")
                         existing_ui = True
@@ -706,9 +706,9 @@ def launch_ui() -> str:
             except Exception as e:
                 logger.warning(f"Could not clear existing command file: {e}")
             
-            # Start the PyQt UI process
+            # Start the UI process
             ui_process = subprocess.Popen(
-                [sys.executable, "-m", "speech_mcp.ui.pyqt"],
+                [sys.executable, "-m", "speech_mcp.ui"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
