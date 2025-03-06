@@ -160,6 +160,8 @@ The MCP supports multiple text-to-speech engines:
 
 **Note about Voice Models**: The voice models are `.pt` files (PyTorch models) that are loaded by Kokoro. Each voice model is approximately 523 KB in size and is automatically downloaded when needed.
 
+**Voice Persistence**: The selected voice is automatically saved to a configuration file (`~/.config/speech-mcp/config.json`) and will be remembered between sessions. This allows users to set their preferred voice once and have it used consistently.
+
 ##### Available Kokoro Voices
 
 **American Female Voices**

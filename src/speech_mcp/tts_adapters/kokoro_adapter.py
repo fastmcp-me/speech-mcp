@@ -23,6 +23,23 @@ import threading
 import importlib.util
 from typing import Optional, Dict, Any, List
 
+# Import configuration module
+try:
+    from speech_mcp.config import get_setting, set_setting, get_env_setting, set_env_setting
+except ImportError:
+    # Fallback if config module is not available
+    def get_setting(section, key, default=None):
+        return default
+    
+    def set_setting(section, key, value):
+        return False
+    
+    def get_env_setting(name, default=None):
+        return os.environ.get(name, default)
+    
+    def set_env_setting(name, value):
+        os.environ[name] = value
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
@@ -34,15 +51,28 @@ class KokoroTTS:
     to pyttsx3 if Kokoro is not available.
     """
     
-    def __init__(self, voice: str = "af_heart", lang_code: str = "a", speed: float = 1.0):
+    def __init__(self, voice: str = None, lang_code: str = "a", speed: float = 1.0):
         """
         Initialize the Kokoro TTS adapter
         
         Args:
-            voice: The voice to use (default: "af_heart")
+            voice: The voice to use (default from config or "af_heart")
             lang_code: The language code to use (default: "a" for American English)
             speed: The speaking speed (default: 1.0)
         """
+        # Get voice preference from config or environment variable
+        if voice is None:
+            # First try environment variable
+            env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+            if env_voice:
+                voice = env_voice
+                logger.info(f"Using voice from environment variable: {voice}")
+            else:
+                # Then try config file
+                config_voice = get_setting("tts", "voice", "af_heart")
+                voice = config_voice
+                logger.info(f"Using voice from config: {voice}")
+        
         self.voice = voice
         self.lang_code = lang_code
         self.speed = speed
@@ -288,14 +318,26 @@ class KokoroTTS:
                 
                 # Also update the internal voice name
                 self.voice = voice
-                return True
             else:
                 # Assume it's a Kokoro voice
                 old_voice = self.voice
                 self.voice = voice
                 logger.info(f"Kokoro voice changed from {old_voice} to {voice}")
                 print(f"Kokoro voice changed from {old_voice} to {voice}")
-                return True
+            
+            # Save the voice preference to config and environment variable
+            try:
+                # Save to config file
+                set_setting("tts", "voice", voice)
+                
+                # Save to environment variable
+                set_env_setting("SPEECH_MCP_TTS_VOICE", voice)
+                
+                logger.info(f"Voice preference saved: {voice}")
+            except Exception as e:
+                logger.error(f"Error saving voice preference: {e}")
+            
+            return True
         except Exception as e:
             logger.error(f"Error setting voice: {e}")
             print(f"Error setting voice: {e}")

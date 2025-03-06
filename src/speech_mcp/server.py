@@ -154,8 +154,41 @@ def initialize_tts():
         try:
             from speech_mcp.tts_adapters.kokoro_adapter import KokoroTTS
             
-            # Initialize with Kokoro voice settings
-            tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+            # Initialize with default or saved voice settings
+            try:
+                # Import config module if available
+                try:
+                    from speech_mcp.config import get_setting, get_env_setting
+                    
+                    # Get saved voice preference
+                    voice = None
+                    
+                    # First check environment variable
+                    env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+                    if env_voice:
+                        voice = env_voice
+                        logger.info(f"Using voice from environment variable: {voice}")
+                    else:
+                        # Then check config file
+                        config_voice = get_setting("tts", "voice", None)
+                        if config_voice:
+                            voice = config_voice
+                            logger.info(f"Using voice from config: {voice}")
+                except ImportError:
+                    voice = None
+                    logger.info("Config module not available, using default voice")
+                
+                # Initialize TTS engine with the saved or default voice
+                if voice:
+                    tts_engine = KokoroTTS(voice=voice, lang_code="a", speed=1.0)
+                else:
+                    tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+                
+            except Exception as e:
+                logger.error(f"Error initializing TTS with saved voice: {e}")
+                # Fall back to default
+                tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+                
             logger.info("Kokoro TTS adapter initialized successfully as primary TTS engine")
             print("Kokoro TTS adapter initialized successfully as primary TTS engine!")
             

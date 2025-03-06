@@ -72,14 +72,40 @@ class TTSAdapter(QObject):
                     # Import Kokoro adapter
                     from speech_mcp.tts_adapters.kokoro_adapter import KokoroTTS
                     
-                    # Initialize with default voice settings
-                    self.tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+                    # Import config module if available
+                    try:
+                        from speech_mcp.config import get_setting, get_env_setting
+                        
+                        # Get saved voice preference
+                        voice = None
+                        
+                        # First check environment variable
+                        env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+                        if env_voice:
+                            voice = env_voice
+                            logger.info(f"Using voice from environment variable: {voice}")
+                        else:
+                            # Then check config file
+                            config_voice = get_setting("tts", "voice", None)
+                            if config_voice:
+                                voice = config_voice
+                                logger.info(f"Using voice from config: {voice}")
+                    except ImportError:
+                        voice = None
+                        logger.info("Config module not available, using default voice")
+                    
+                    # Initialize with default or saved voice settings
+                    if voice:
+                        self.tts_engine = KokoroTTS(voice=voice, lang_code="a", speed=1.0)
+                    else:
+                        self.tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+                    
                     logger.info("Kokoro TTS adapter initialized successfully")
                     
                     # List of available Kokoro voice models
                     voices = self.tts_engine.get_available_voices()
                     self.available_voices = voices
-                    self.current_voice = "af_heart"  # Default to af_heart
+                    self.current_voice = self.tts_engine.voice  # Use the actual voice that was set
                     logger.debug(f"Available Kokoro TTS voices: {len(voices)}")
                     for i, voice in enumerate(voices):
                         logger.debug(f"Voice {i}: {voice}")
@@ -851,6 +877,8 @@ class PyQtSpeechUI(QMainWindow):
         
         # Set the current selection
         self.voice_combo.setCurrentIndex(selected_index)
+        logger.info(f"Voice combo initialized with {len(voices)} voices, selected: {current_voice}")
+        print(f"Voice combo initialized with {len(voices)} voices, selected: {current_voice}")
     
     def on_voice_changed(self, index):
         """Handle voice selection change"""
