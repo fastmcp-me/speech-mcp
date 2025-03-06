@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
     QWidget, QLabel, QPushButton, QProgressBar, QComboBox
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont
 
 # Setup logging
@@ -683,30 +683,29 @@ class PyQtSpeechUI(QMainWindow):
     """
     Main speech UI window implemented with PyQt.
     """
+    # Signal for when components are fully loaded
+    components_ready = pyqtSignal()
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Goose Speech Interface")
         self.resize(500, 300)
         
-        # Initialize components
-        self.audio_processor = AudioProcessor()
-        self.audio_processor.audio_level_updated.connect(self.update_audio_level)
-        self.audio_processor.transcription_ready.connect(self.handle_transcription)
+        # Set initial loading state
+        self.tts_ready = False
+        self.stt_ready = False
+        self.audio_ready = False
         
-        # Initialize TTS adapter
-        self.tts_adapter = TTSAdapter()
-        self.tts_adapter.speaking_started.connect(self.on_speaking_started)
-        self.tts_adapter.speaking_finished.connect(self.on_speaking_finished)
+        # Create UI first (will be in loading state)
+        self.setup_ui()
         
-        # Create a command file to indicate UI is ready
+        # Create a command file to indicate UI is visible (but not fully ready)
         try:
             with open(COMMAND_FILE, 'w') as f:
                 f.write("UI_READY")
-            logger.info("Created initial UI_READY command file")
+            logger.info("Created initial UI_READY command file (UI is visible)")
         except Exception as e:
             logger.error(f"Error creating initial command file: {e}")
-        
-        self.setup_ui()
         
         # Start checking for server commands
         self.command_check_timer = QTimer(self)
@@ -718,15 +717,11 @@ class PyQtSpeechUI(QMainWindow):
         self.response_check_timer.timeout.connect(self.check_for_responses)
         self.response_check_timer.start(100)  # Check every 100ms
         
-        # Start with listening mode if requested
-        if os.path.exists(COMMAND_FILE):
-            try:
-                with open(COMMAND_FILE, 'r') as f:
-                    command = f.read().strip()
-                    if command == "LISTEN":
-                        self.start_listening()
-            except Exception as e:
-                logger.error(f"Error reading command file: {e}")
+        # Connect the components_ready signal to update UI
+        self.components_ready.connect(self.on_components_ready)
+        
+        # Initialize components in background threads
+        QTimer.singleShot(100, self.initialize_components)
         
     def setup_ui(self):
         """Set up the UI components."""
@@ -736,13 +731,13 @@ class PyQtSpeechUI(QMainWindow):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(15)
         
-        # Status label
-        self.status_label = QLabel("Ready")
+        # Status label - initially shows loading
+        self.status_label = QLabel("Loading...")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("""
             font-size: 18px;
             font-weight: bold;
-            color: #7f8c8d;
+            color: #f39c12;
         """)
         main_layout.addWidget(self.status_label)
         
@@ -751,7 +746,7 @@ class PyQtSpeechUI(QMainWindow):
         main_layout.addWidget(self.visualizer)
         
         # Transcription display
-        self.transcription_label = QLabel("Say something...")
+        self.transcription_label = QLabel("Initializing speech recognition...")
         self.transcription_label.setAlignment(Qt.AlignCenter)
         self.transcription_label.setWordWrap(True)
         self.transcription_label.setStyleSheet("""
@@ -776,8 +771,9 @@ class PyQtSpeechUI(QMainWindow):
             padding: 5px;
         """)
         
-        # Populate voice combo box
-        self.update_voice_list()
+        # Add loading placeholder
+        self.voice_combo.addItem("Loading voices...")
+        self.voice_combo.setEnabled(False)
         self.voice_combo.currentIndexChanged.connect(self.on_voice_changed)
         
         voice_layout.addWidget(voice_label)
@@ -789,6 +785,7 @@ class PyQtSpeechUI(QMainWindow):
         
         self.listen_button = QPushButton("Listen")
         self.listen_button.clicked.connect(self.toggle_listening)
+        self.listen_button.setEnabled(False)  # Disabled until components are ready
         self.listen_button.setStyleSheet("""
             background-color: #00a0e9;
             color: white;
@@ -800,6 +797,7 @@ class PyQtSpeechUI(QMainWindow):
         
         self.speak_button = QPushButton("Test Voice")
         self.speak_button.clicked.connect(self.test_voice)
+        self.speak_button.setEnabled(False)  # Disabled until components are ready
         self.speak_button.setStyleSheet("""
             background-color: #27ae60;
             color: white;
@@ -841,6 +839,11 @@ class PyQtSpeechUI(QMainWindow):
     
     def update_voice_list(self):
         """Update the voice selection combo box"""
+        # Skip if TTS adapter is not ready yet
+        if not hasattr(self, 'tts_adapter') or not self.tts_adapter:
+            logger.warning("Cannot update voice list - TTS adapter not ready")
+            return
+            
         self.voice_combo.clear()
         voices = self.tts_adapter.get_available_voices()
         current_voice = self.tts_adapter.get_current_voice()
@@ -875,13 +878,88 @@ class PyQtSpeechUI(QMainWindow):
             if voice == current_voice:
                 selected_index = i
         
+        # Enable the combo box now that it has real data
+        self.voice_combo.setEnabled(True)
+        
         # Set the current selection
         self.voice_combo.setCurrentIndex(selected_index)
         logger.info(f"Voice combo initialized with {len(voices)} voices, selected: {current_voice}")
         print(f"Voice combo initialized with {len(voices)} voices, selected: {current_voice}")
     
+    def initialize_components(self):
+        """Initialize components in background threads"""
+        logger.info("Starting background initialization of components")
+        self.status_label.setText("Loading components...")
+        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #f39c12;")
+        
+        # Start background threads for initialization
+        threading.Thread(target=self.initialize_audio_processor, daemon=True).start()
+        threading.Thread(target=self.initialize_tts_adapter, daemon=True).start()
+    
+    def initialize_audio_processor(self):
+        """Initialize audio processor in background thread"""
+        try:
+            logger.info("Initializing audio processor in background")
+            self.audio_processor = AudioProcessor()
+            self.audio_processor.audio_level_updated.connect(self.update_audio_level)
+            self.audio_processor.transcription_ready.connect(self.handle_transcription)
+            self.audio_ready = True
+            logger.info("Audio processor initialization complete")
+            self.check_all_components_ready()
+        except Exception as e:
+            logger.error(f"Error initializing audio processor: {e}")
+    
+    def initialize_tts_adapter(self):
+        """Initialize TTS adapter in background thread"""
+        try:
+            logger.info("Initializing TTS adapter in background")
+            self.tts_adapter = TTSAdapter()
+            self.tts_adapter.speaking_started.connect(self.on_speaking_started)
+            self.tts_adapter.speaking_finished.connect(self.on_speaking_finished)
+            self.tts_ready = True
+            logger.info("TTS adapter initialization complete")
+            
+            # Update voice list when TTS is ready - use QTimer to call from main thread
+            QTimer.singleShot(0, self.update_voice_list)
+            
+            self.check_all_components_ready()
+        except Exception as e:
+            logger.error(f"Error initializing TTS adapter: {e}")
+    
+    def check_all_components_ready(self):
+        """Check if all components are ready and emit signal if they are"""
+        if self.audio_ready and self.tts_ready:
+            logger.info("All components initialized successfully")
+            # Use QTimer to safely emit signal from background thread
+            QTimer.singleShot(0, lambda: self.components_ready.emit())
+    
+    def on_components_ready(self):
+        """Called when all components are ready"""
+        logger.info("All components are ready, updating UI")
+        self.status_label.setText("Ready")
+        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
+        
+        # Enable buttons that require components to be ready
+        self.speak_button.setEnabled(True)
+        self.listen_button.setEnabled(True)
+        
+        # Check for any pending commands
+        if os.path.exists(COMMAND_FILE):
+            try:
+                with open(COMMAND_FILE, 'r') as f:
+                    command = f.read().strip()
+                    if command == "LISTEN":
+                        self.start_listening()
+            except Exception as e:
+                logger.error(f"Error reading command file: {e}")
+    
+    
     def on_voice_changed(self, index):
         """Handle voice selection change"""
+        # Skip if TTS adapter is not ready yet
+        if not hasattr(self, 'tts_adapter') or not self.tts_adapter:
+            return
+            
         if index < 0:
             return
         
@@ -894,6 +972,12 @@ class PyQtSpeechUI(QMainWindow):
     
     def test_voice(self):
         """Test the selected voice"""
+        # Skip if TTS adapter is not ready yet
+        if not hasattr(self, 'tts_adapter') or not self.tts_adapter:
+            self.status_label.setText("TTS not ready yet")
+            QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
+            return
+            
         if self.tts_adapter.is_speaking:
             logger.warning("Already speaking, ignoring test request")
             return
@@ -911,6 +995,12 @@ class PyQtSpeechUI(QMainWindow):
     
     def start_listening(self):
         """Start listening mode."""
+        # Skip if audio processor is not ready yet
+        if not hasattr(self, 'audio_processor') or not self.audio_processor:
+            self.status_label.setText("Speech recognition not ready yet")
+            QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
+            return
+            
         self.audio_processor.start_listening()
         self.status_label.setText("Listening...")
         self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #00c8ff;")
@@ -926,6 +1016,10 @@ class PyQtSpeechUI(QMainWindow):
     
     def stop_listening(self):
         """Stop listening mode."""
+        # Skip if audio processor is not ready yet
+        if not hasattr(self, 'audio_processor') or not self.audio_processor:
+            return
+            
         self.audio_processor.stop_listening()
         self.status_label.setText("Not Listening")
         self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #7f8c8d;")
@@ -941,6 +1035,12 @@ class PyQtSpeechUI(QMainWindow):
     
     def toggle_listening(self):
         """Toggle between listening and not listening states."""
+        # Skip if audio processor is not ready yet
+        if not hasattr(self, 'audio_processor') or not self.audio_processor:
+            self.status_label.setText("Speech recognition not ready yet")
+            QTimer.singleShot(2000, lambda: self.status_label.setText("Loading..."))
+            return
+            
         if self.audio_processor.is_listening:
             self.stop_listening()
         else:
@@ -966,17 +1066,23 @@ class PyQtSpeechUI(QMainWindow):
                     command = f.read().strip()
                 
                 # Process the command
-                if command == "LISTEN" and not self.audio_processor.is_listening:
+                if command == "LISTEN":
                     logger.info("Received LISTEN command")
+                    # If components are not ready, store the command to process later
+                    if not hasattr(self, 'audio_processor') or not self.audio_processor:
+                        logger.info("Components not ready yet, will process LISTEN command when ready")
+                        # Command will be processed in on_components_ready
+                        return
                     self.start_listening()
-                elif command == "IDLE" and self.audio_processor.is_listening:
+                elif command == "IDLE" and hasattr(self, 'audio_processor') and self.audio_processor and self.audio_processor.is_listening:
                     logger.info("Received IDLE command")
                     self.stop_listening()
                 elif command == "SPEAK":
                     logger.info("Received SPEAK command")
                     # We'll handle speaking in check_for_responses
-                    self.status_label.setText("Speaking...")
-                    self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
+                    if hasattr(self, 'tts_adapter') and self.tts_adapter:
+                        self.status_label.setText("Speaking...")
+                        self.status_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
             except Exception as e:
                 logger.error(f"Error reading command file: {e}")
     
@@ -996,6 +1102,12 @@ class PyQtSpeechUI(QMainWindow):
                 except Exception as e:
                     logger.warning(f"Error removing response file: {e}")
                 
+                # If TTS is not ready yet, show a message and return
+                if not hasattr(self, 'tts_adapter') or not self.tts_adapter:
+                    logger.warning("TTS not ready yet, cannot speak response")
+                    self.transcription_label.setText("Response received but TTS not ready yet")
+                    return
+                
                 # Speak the response using the TTS adapter
                 if response:
                     self.tts_adapter.speak(response)
@@ -1005,7 +1117,9 @@ class PyQtSpeechUI(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event."""
-        self.audio_processor.stop_listening()
+        # Stop audio processor if it exists
+        if hasattr(self, 'audio_processor') and self.audio_processor:
+            self.audio_processor.stop_listening()
         
         # Write a UI_CLOSED command to the command file
         try:
