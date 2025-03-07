@@ -21,10 +21,23 @@
         "responsibilities": ["Audio recording", "Speech recognition", "Text-to-speech", "UI display"]
       },
       {
+        "name": "pyqt_ui",
+        "path": "src/speech_mcp/ui/pyqt/pyqt_ui.py",
+        "description": "New PyQt-based UI implementation with voice selection and persistence",
+        "responsibilities": ["Audio visualization", "Speech recognition UI", "Modern interface with dark theme", "Voice selection with persistence"],
+        "status": "Phase 4 completed - Server Integration"
+      },
+      {
         "name": "tts_adapters",
         "path": "src/speech_mcp/tts_adapters/",
         "description": "Text-to-speech adapters for different TTS engines",
         "responsibilities": ["Provide unified TTS interface", "Support multiple TTS engines", "Handle fallbacks"]
+      },
+      {
+        "name": "config",
+        "path": "src/speech_mcp/config/__init__.py",
+        "description": "Configuration management system for user preferences",
+        "responsibilities": ["Store and retrieve user preferences", "Manage configuration file", "Provide environment variable support"]
       }
     ],
     "entry_points": [
@@ -43,6 +56,10 @@
       {
         "name": "ui/__main__.py",
         "description": "UI module entry point for direct execution"
+      },
+      {
+        "name": "ui/pyqt/__main__.py",
+        "description": "PyQt UI module entry point for direct testing"
       }
     ]
   },
@@ -88,7 +105,8 @@
       "faster-whisper>=0.10.0",
       "numba>=0.57.0",
       "pyttsx3>=2.90",
-      "psutil>=5.9.0"
+      "psutil>=5.9.0",
+      "PyQt5>=5.15.0"
     ],
     "optional": {
       "kokoro": [
@@ -109,6 +127,10 @@
       "text_to_speech": {
         "primary": "kokoro",
         "fallback": "pyttsx3"
+      },
+      "ui_frameworks": {
+        "current": "custom",
+        "new": "PyQt5"
       }
     }
   },
@@ -126,6 +148,11 @@
       {
         "path": "src/speech_mcp/response.txt",
         "description": "Temporary file used to pass response text from server to UI for speaking"
+      },
+      {
+        "path": "~/.config/speech-mcp/config.json",
+        "description": "User preferences configuration file",
+        "fields": ["tts.engine", "tts.voice", "tts.speed", "tts.lang_code", "stt.engine", "stt.model", "ui.theme"]
       }
     ],
     "logs": [
@@ -171,12 +198,24 @@
         "name": "Kokoro",
         "priority": 1,
         "description": "Primary TTS engine with high-quality voice synthesis",
-        "voices": [
-          "af_heart", "af_chill", "af_robot", "af_bright", "af_serious",
-          "am_casual", "am_calm", "am_serious", "am_happy"
-        ],
-        "languages": ["English"],
-        "optional_languages": ["Japanese", "Chinese"],
+        "voices": {
+          "American Female": ["af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky"],
+          "American Male": ["am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"],
+          "British Female": ["bf_alice", "bf_emma", "bf_isabella", "bf_lily"],
+          "British Male": ["bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
+          "Other English": ["ef_dora", "em_alex", "em_santa"],
+          "French": ["ff_siwis"],
+          "Hindi": ["hf_alpha", "hf_beta", "hm_omega", "hm_psi"],
+          "Italian": ["if_sara", "im_nicola"],
+          "Japanese": ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo"],
+          "Portuguese": ["pf_dora", "pm_alex", "pm_santa"],
+          "Chinese": ["zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang"]
+        },
+        "voice_persistence": {
+          "config_file": "~/.config/speech-mcp/config.json",
+          "env_variable": "SPEECH_MCP_TTS_VOICE"
+        },
+        "languages": ["English", "Japanese", "Chinese", "French", "Hindi", "Italian", "Portuguese"],
         "installation": "pip install speech-mcp[kokoro]"
       },
       {
@@ -188,6 +227,12 @@
     ]
   },
   "recent_fixes": {
+    "pyqt_ui_server_integration": "Completed Phase 4 of PyQt UI implementation - Server Integration",
+    "server_integration": "Updated server.py to launch PyQt UI instead of Tkinter UI",
+    "voice_persistence": "Added voice preference persistence using configuration file and environment variables",
+    "voice_list": "Updated Kokoro voice list with all 54 available voice models",
+    "pyqt_ui": "Completed Phase 3 of PyQt UI implementation with TTS integration",
+    "config_system": "Added configuration system for user preferences",
     "kokoro_tts": "Added Kokoro as primary TTS engine with fallback to pyttsx3",
     "tts_adapters": "Created modular TTS adapter system for multiple engines",
     "listen_timeout": "Increased timeout from 60s to 10min, reduced silence threshold",
@@ -253,7 +298,11 @@
         "issue": "TTS falling back to pyttsx3",
         "check": "Check logs for Kokoro initialization errors",
         "solution": "Ensure all Kokoro dependencies are installed properly"
+      },
+      {
+        "issue": "Voice preference not persisting",
+        "check": "Check if config file exists: ~/.config/speech-mcp/config.json",
+        "solution": "Ensure the directory is writable or set SPEECH_MCP_TTS_VOICE environment variable"
       }
     ]
   }
-}
