@@ -1226,12 +1226,13 @@ class PyQtSpeechUI(QMainWindow):
         # Control buttons
         button_layout = QHBoxLayout()
         
-        # Add Listen button
-        self.listen_button = AnimatedButton("Start Listening")
-        self.listen_button.clicked.connect(self.toggle_listening)
-        self.listen_button.setEnabled(True)  # Enable the button
-        self.listen_button.set_style("""
-            background-color: #3498db;
+        # Add Select Voice button
+        self.select_voice_button = AnimatedButton("Save Voice")
+        self.select_voice_button.clicked.connect(self.save_selected_voice)
+        self.select_voice_button.setEnabled(True)
+        self.select_voice_button.setMinimumWidth(120)
+        self.select_voice_button.set_style("""
+            background-color: #9b59b6;
             color: white;
             border: none;
             border-radius: 5px;
@@ -1242,7 +1243,8 @@ class PyQtSpeechUI(QMainWindow):
         # Use AnimatedButton for Test Voice button
         self.speak_button = AnimatedButton("Test Voice")
         self.speak_button.clicked.connect(self.test_voice)
-        self.speak_button.setEnabled(True)  # Enable the button
+        self.speak_button.setEnabled(True)
+        self.speak_button.setMinimumWidth(120)
         self.speak_button.set_style("""
             background-color: #27ae60;
             color: white;
@@ -1255,6 +1257,7 @@ class PyQtSpeechUI(QMainWindow):
         # Use AnimatedButton for Close button
         self.close_button = AnimatedButton("Close")
         self.close_button.clicked.connect(self.close)
+        self.close_button.setMinimumWidth(120)
         self.close_button.set_style("""
             background-color: #e74c3c;
             color: white;
@@ -1264,9 +1267,15 @@ class PyQtSpeechUI(QMainWindow):
             font-weight: bold;
         """)
         
-        button_layout.addWidget(self.listen_button)
+        # Add buttons to layout with equal spacing
+        button_layout.addStretch(1)
+        button_layout.addWidget(self.select_voice_button)
+        button_layout.addSpacing(10)
         button_layout.addWidget(self.speak_button)
+        button_layout.addSpacing(10)
         button_layout.addWidget(self.close_button)
+        button_layout.addStretch(1)
+        
         main_layout.addLayout(button_layout)
         
         # Set the main widget
@@ -1406,59 +1415,126 @@ class PyQtSpeechUI(QMainWindow):
         # Clear initialization message from transcription label
         self.transcription_label.setText("Ready for voice interaction")
         
-        # Check if there's a saved voice preference
-        self.check_voice_preference()
-        
         # Check for any pending commands
         if os.path.exists(COMMAND_FILE):
             try:
                 with open(COMMAND_FILE, 'r') as f:
                     command = f.read().strip()
-                    if command == "LISTEN":
-                        # Only start listening if we have a saved voice preference
-                        if self.has_saved_voice_preference():
-                            self.start_listening()
-                        else:
-                            logger.info("Ignoring LISTEN command because no voice preference is saved")
+                    if command == "LISTEN" and self.has_saved_voice_preference():
+                        # Start listening since we have a saved voice preference
+                        self.start_listening()
             except Exception as e:
                 logger.error(f"Error reading command file: {e}")
+        
+        # If no voice preference is saved, show guidance message
+        if not self.has_saved_voice_preference():
+            self.transcription_label.setText("Please select a voice from the dropdown and click 'Save Voice' to continue")
+            # Wait a moment before speaking to ensure UI is fully ready
+            QTimer.singleShot(500, self.play_guidance_message)
     
     def has_saved_voice_preference(self):
-        """Check if there's a saved voice preference"""
+        """Check if a voice preference has been saved"""
         try:
-            # Check if we have a config module
-            if importlib.util.find_spec("speech_mcp.config") is not None:
-                from speech_mcp.config import get_setting, get_env_setting
+            # First check environment variable
+            from speech_mcp.config import get_env_setting
+            env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+            if env_voice:
+                logger.info(f"Found voice preference in environment variable: {env_voice}")
+                return True
                 
-                # Check environment variable
-                env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
-                if env_voice:
-                    return True
+            # Then check config file
+            from speech_mcp.config import get_setting
+            config_voice = get_setting("tts", "voice", None)
+            if config_voice:
+                logger.info(f"Found voice preference in config file: {config_voice}")
+                return True
                 
-                # Check config file
-                config_voice = get_setting("tts", "voice", None)
-                if config_voice:
-                    return True
-            
+            logger.info("No saved voice preference found")
+            return False
+        except ImportError:
+            logger.warning("Config module not available, assuming no voice preference")
             return False
         except Exception as e:
             logger.error(f"Error checking for saved voice preference: {e}")
             return False
     
-    def check_voice_preference(self):
-        """Check if there's a saved voice preference and play guidance if not"""
-        if not self.has_saved_voice_preference():
-            logger.info("No saved voice preference found, playing guidance message")
-            self.transcription_label.setText("Please select a voice from the dropdown and click 'Test Voice' to hear it.")
+    def save_voice_preference(self, voice):
+        """Save the selected voice preference to config"""
+        try:
+            # Save to config file
+            from speech_mcp.config import set_setting
+            result = set_setting("tts", "voice", voice)
             
-            # Wait a moment before speaking to ensure UI is fully ready
-            QTimer.singleShot(500, self.play_guidance_message)
+            # Also set environment variable for current session
+            from speech_mcp.config import set_env_setting
+            set_env_setting("SPEECH_MCP_TTS_VOICE", voice)
+            
+            logger.info(f"Voice preference saved: {voice}")
+            return result
+        except ImportError:
+            logger.error("Config module not available, cannot save voice preference")
+            return False
+        except Exception as e:
+            logger.error(f"Error saving voice preference: {e}")
+            return False
+    
+    def save_selected_voice(self):
+        """Save the selected voice and switch to listen mode"""
+        # Get the currently selected voice
+        index = self.voice_combo.currentIndex()
+        if index < 0:
+            logger.warning("No voice selected")
+            self.transcription_label.setText("Please select a voice from the dropdown")
+            return
+        
+        voice = self.voice_combo.itemData(index)
+        if not voice:
+            logger.warning("Invalid voice selection")
+            self.transcription_label.setText("Please select a valid voice from the dropdown")
+            return
+        
+        logger.info(f"Saving voice preference: {voice}")
+        
+        # Save the voice preference
+        if self.save_voice_preference(voice):
+            logger.info("Voice preference saved successfully")
+            self.transcription_label.setText(f"Voice '{voice}' saved as your preference")
+            
+            # Create a UI_READY command file to signal back to the server
+            try:
+                with open(COMMAND_FILE, 'w') as f:
+                    f.write("UI_READY")
+                logger.info("Created UI_READY command file after voice selection")
+            except Exception as e:
+                logger.error(f"Error creating command file: {e}")
+            
+            # Test the voice to confirm
+            QTimer.singleShot(1000, lambda: self.tts_adapter.speak("Voice preference saved. You can now start listening."))
+        else:
+            logger.error("Failed to save voice preference")
+            self.transcription_label.setText("Failed to save voice preference. Please try again.")
     
     def play_guidance_message(self):
         """Play a guidance message for first-time users"""
         if hasattr(self, 'tts_adapter') and self.tts_adapter:
-            self.tts_adapter.speak("This is the default voice. Please select a voice from the dropdown menu and click Test Voice to hear it.")
+            # Add a highlight effect to the Select Voice button
+            original_style = self.select_voice_button.styleSheet()
+            highlight_style = """
+                background-color: #e74c3c;
+                color: white;
+                border: 2px solid #f39c12;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-weight: bold;
+            """
+            self.select_voice_button.setStyleSheet(highlight_style)
+            
+            # Speak the guidance message
+            self.tts_adapter.speak("Please select a voice from the dropdown menu and click Save Voice to continue.")
             logger.info("Played guidance message for first-time user")
+            
+            # Restore the original style after a delay
+            QTimer.singleShot(3000, lambda: self.select_voice_button.setStyleSheet(original_style))
     
     
     def on_voice_changed(self, index):
@@ -1562,7 +1638,6 @@ class PyQtSpeechUI(QMainWindow):
             return
             
         self.audio_processor.start_listening()
-        self.listen_button.setText("Stop Listening")
         
         # Activate user visualizer, deactivate agent visualizer
         self.set_user_visualizer_active(True)
@@ -1575,23 +1650,9 @@ class PyQtSpeechUI(QMainWindow):
             return
             
         self.audio_processor.stop_listening()
-        self.listen_button.setText("Start Listening")
         
         # Deactivate user visualizer
         self.set_user_visualizer_active(False)
-    
-    def toggle_listening(self):
-        """Toggle between listening and not listening states."""
-        # Skip if audio processor is not ready yet
-        if not hasattr(self, 'audio_processor') or not self.audio_processor:
-            logger.warning("Listen button clicked but audio processor not ready yet")
-            self.transcription_label.setText("Speech recognition not ready yet. Please wait...")
-            return
-            
-        if self.audio_processor.is_listening:
-            self.stop_listening()
-        else:
-            self.start_listening()
     
     def on_speaking_started(self):
         """Called when speaking starts."""
@@ -1656,8 +1717,10 @@ class PyQtSpeechUI(QMainWindow):
                         self.start_listening()
                     else:
                         logger.info("Ignoring LISTEN command because no voice preference is saved")
-                        # Play guidance message instead
-                        self.check_voice_preference()
+                        # Show guidance message instead
+                        self.transcription_label.setText("Please select a voice from the dropdown and click 'Select Voice' to continue")
+                        # Wait a moment before speaking to ensure UI is fully ready
+                        QTimer.singleShot(500, self.play_guidance_message)
                         
                 elif command == "IDLE" and hasattr(self, 'audio_processor') and self.audio_processor and self.audio_processor.is_listening:
                     logger.info("Received IDLE command")

@@ -7,6 +7,7 @@ import threading
 import tempfile
 import subprocess
 import psutil
+import importlib.util
 from typing import Dict, Optional, Callable
 
 from mcp.server.fastmcp import FastMCP
@@ -668,6 +669,27 @@ def launch_ui() -> str:
         logger.info("UI is already running, no need to launch")
         return "Speech UI is already running."
     
+    # Check if a voice preference is saved
+    has_voice_preference = False
+    try:
+        # Import config module if available
+        if importlib.util.find_spec("speech_mcp.config") is not None:
+            from speech_mcp.config import get_setting, get_env_setting
+            
+            # Check environment variable
+            env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+            if env_voice:
+                has_voice_preference = True
+                logger.info(f"Found voice preference in environment variable: {env_voice}")
+            else:
+                # Check config file
+                config_voice = get_setting("tts", "voice", None)
+                if config_voice:
+                    has_voice_preference = True
+                    logger.info(f"Found voice preference in config: {config_voice}")
+    except Exception as e:
+        logger.error(f"Error checking for voice preference: {e}")
+    
     # Start a new UI process
     try:
         # Check for any existing UI processes first to prevent duplicates
@@ -761,7 +783,11 @@ def launch_ui() -> str:
                     print(f"Waiting for UI to initialize: {waited_time:.1f}s elapsed")
             
             if ui_ready:
-                return f"PyQt Speech UI launched successfully with PID {ui_process.pid} and is ready."
+                # Check if we have a voice preference
+                if has_voice_preference:
+                    return f"PyQt Speech UI launched successfully with PID {ui_process.pid} and is ready."
+                else:
+                    return f"PyQt Speech UI launched successfully with PID {ui_process.pid}. Please select a voice to continue."
             else:
                 logger.warning(f"PyQt UI did not report ready state within {max_wait_time}s, but process is running")
                 print(f"WARNING: PyQt UI started but did not report ready state within {max_wait_time}s")

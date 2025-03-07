@@ -1,6 +1,6 @@
 [project]
 name = "speech-mcp"
-version = "0.4.6"
+version = "1.0.0"
 description = "Speech MCP Server with command-line interface and Kokoro TTS support"
 readme = "README.md"
 requires-python = ">=3.10"
