@@ -6,24 +6,18 @@ This module provides functions for reading and writing configuration settings.
 
 import os
 import json
-import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Import centralized constants
 from speech_mcp.constants import CONFIG_DIR, CONFIG_FILE, DEFAULT_CONFIG
 
-# Set up logging
-logger = logging.getLogger(__name__)
-
 def ensure_config_dir() -> None:
     """Ensure the configuration directory exists."""
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        logger.debug(f"Configuration directory ensured: {CONFIG_DIR}")
-    except Exception as e:
-        logger.error(f"Error creating configuration directory: {e}")
-
+    except Exception:
+        pass
 
 def load_config() -> Dict[str, Any]:
     """
@@ -38,7 +32,6 @@ def load_config() -> Dict[str, Any]:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
-            logger.info(f"Configuration loaded from {CONFIG_FILE}")
             
             # Merge with default config to ensure all keys exist
             merged_config = DEFAULT_CONFIG.copy()
@@ -50,12 +43,9 @@ def load_config() -> Dict[str, Any]:
             
             return merged_config
         else:
-            logger.info(f"Configuration file not found, using defaults")
             return DEFAULT_CONFIG.copy()
-    except Exception as e:
-        logger.error(f"Error loading configuration: {e}")
+    except Exception:
         return DEFAULT_CONFIG.copy()
-
 
 def save_config(config: Dict[str, Any]) -> bool:
     """
@@ -72,12 +62,9 @@ def save_config(config: Dict[str, Any]) -> bool:
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
-        logger.info(f"Configuration saved to {CONFIG_FILE}")
         return True
-    except Exception as e:
-        logger.error(f"Error saving configuration: {e}")
+    except Exception:
         return False
-
 
 def get_setting(section: str, key: str, default: Any = None) -> Any:
     """
@@ -94,10 +81,8 @@ def get_setting(section: str, key: str, default: Any = None) -> Any:
     config = load_config()
     try:
         return config.get(section, {}).get(key, default)
-    except Exception as e:
-        logger.error(f"Error getting setting {section}.{key}: {e}")
+    except Exception:
         return default
-
 
 def set_setting(section: str, key: str, value: Any) -> bool:
     """
@@ -117,10 +102,8 @@ def set_setting(section: str, key: str, value: Any) -> bool:
             config[section] = {}
         config[section][key] = value
         return save_config(config)
-    except Exception as e:
-        logger.error(f"Error setting {section}.{key} to {value}: {e}")
+    except Exception:
         return False
-
 
 # Environment variable support
 def get_env_setting(name: str, default: Any = None) -> Any:
@@ -135,7 +118,6 @@ def get_env_setting(name: str, default: Any = None) -> Any:
         The environment variable value or default
     """
     return os.environ.get(name, default)
-
 
 def set_env_setting(name: str, value: str) -> None:
     """

@@ -16,15 +16,11 @@ Usage:
 
 import os
 import sys
-import logging
 import threading
 from typing import List, Dict, Any, Optional
 
 # Import base adapter class
 from speech_mcp.tts_adapters import BaseTTSAdapter
-
-# Set up logging
-logger = logging.getLogger(__name__)
 
 class Pyttsx3TTS(BaseTTSAdapter):
     """
@@ -80,17 +76,13 @@ class Pyttsx3TTS(BaseTTSAdapter):
                 for voice in self.engine.getProperty('voices'):
                     if voice.id == voice_id:
                         self.engine.setProperty('voice', voice.id)
-                        logger.info(f"pyttsx3 voice set to: {voice.name}")
                         break
             
             self.is_initialized = True
-            logger.info("pyttsx3 TTS engine initialized successfully")
             return True
-        except ImportError as e:
-            logger.error(f"Failed to import pyttsx3: {e}")
+        except ImportError:
             return False
-        except Exception as e:
-            logger.error(f"Error initializing pyttsx3: {e}")
+        except Exception:
             return False
     
     def speak(self, text: str) -> bool:
@@ -104,19 +96,14 @@ class Pyttsx3TTS(BaseTTSAdapter):
             bool: True if successful, False otherwise
         """
         if not text:
-            logger.warning("Empty text provided to speak")
             return False
         
         if not self.is_initialized or not self.engine:
-            logger.error("pyttsx3 engine not initialized")
             return False
         
         # Prevent multiple simultaneous speech
         if self.is_speaking:
-            logger.warning("Already speaking, ignoring new request")
             return False
-        
-        logger.info(f"Speaking text ({len(text)} chars): {text[:100]}{'...' if len(text) > 100 else ''}")
         
         try:
             self.is_speaking = True
@@ -125,8 +112,7 @@ class Pyttsx3TTS(BaseTTSAdapter):
             threading.Thread(target=self._speak_thread, args=(text,), daemon=True).start()
             
             return True
-        except Exception as e:
-            logger.error(f"Error starting speech thread: {e}")
+        except Exception:
             self.is_speaking = False
             return False
     
@@ -143,10 +129,8 @@ class Pyttsx3TTS(BaseTTSAdapter):
             
             # Process the speech queue
             self.engine.runAndWait()
-            
-            logger.info("pyttsx3 speech completed")
-        except Exception as e:
-            logger.error(f"Error during text-to-speech: {e}")
+        except Exception:
+            pass
         finally:
             self.is_speaking = False
     
@@ -160,7 +144,6 @@ class Pyttsx3TTS(BaseTTSAdapter):
         voices = []
         
         if not self.is_initialized or not self.engine:
-            logger.warning("pyttsx3 engine not initialized, cannot get voices")
             return voices
         
         try:
@@ -170,10 +153,8 @@ class Pyttsx3TTS(BaseTTSAdapter):
             # Format voice IDs with "pyttsx3:" prefix
             for voice in pyttsx3_voices:
                 voices.append(f"pyttsx3:{voice.id}")
-            
-            logger.info(f"Found {len(voices)} pyttsx3 voices")
-        except Exception as e:
-            logger.error(f"Error getting pyttsx3 voices: {e}")
+        except Exception:
+            pass
         
         return voices
     
@@ -188,7 +169,6 @@ class Pyttsx3TTS(BaseTTSAdapter):
             bool: True if successful, False otherwise
         """
         if not self.is_initialized or not self.engine:
-            logger.error("pyttsx3 engine not initialized")
             return False
         
         try:
@@ -205,14 +185,10 @@ class Pyttsx3TTS(BaseTTSAdapter):
                     
                     # Call parent method to update self.voice and save preference
                     super().set_voice(f"pyttsx3:{voice_id}")
-                    
-                    logger.info(f"pyttsx3 voice set to: {v.name}")
                     return True
             
-            logger.error(f"Voice not found: {voice}")
             return False
-        except Exception as e:
-            logger.error(f"Error setting voice: {e}")
+        except Exception:
             return False
     
     def set_speed(self, speed: float) -> bool:
@@ -226,7 +202,6 @@ class Pyttsx3TTS(BaseTTSAdapter):
             bool: True if successful, False otherwise
         """
         if not self.is_initialized or not self.engine:
-            logger.error("pyttsx3 engine not initialized")
             return False
         
         try:
@@ -238,8 +213,6 @@ class Pyttsx3TTS(BaseTTSAdapter):
             rate = int(200 * speed)
             self.engine.setProperty('rate', rate)
             
-            logger.info(f"pyttsx3 rate set to: {rate} words per minute")
             return True
-        except Exception as e:
-            logger.error(f"Error setting pyttsx3 rate: {e}")
+        except Exception:
             return False

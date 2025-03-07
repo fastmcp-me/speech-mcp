@@ -6,9 +6,14 @@ This module provides a PyQt wrapper around the AudioProcessor for speech recogni
 
 import os
 import time
-import logging
 import threading
 from PyQt5.QtCore import QObject, pyqtSignal
+
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__, component="stt")
 
 # Import centralized constants
 from speech_mcp.constants import TRANSCRIPTION_FILE
@@ -16,9 +21,6 @@ from speech_mcp.constants import TRANSCRIPTION_FILE
 # Import shared audio processor and speech recognition
 from speech_mcp.audio_processor import AudioProcessor
 from speech_mcp.speech_recognition import SpeechRecognizer
-
-# Setup logging
-logger = logging.getLogger(__name__)
 
 class AudioProcessorUI(QObject):
     """
@@ -61,6 +63,7 @@ class AudioProcessorUI(QObject):
     def start_listening(self):
         """Start listening for audio input."""
         if self.is_listening:
+            logger.info("Already listening, ignoring start_listening call")
             return
             
         self.is_listening = True
@@ -70,6 +73,8 @@ class AudioProcessorUI(QObject):
             logger.error("Failed to start audio processor")
             self.is_listening = False
             return
+        
+        logger.info("Started listening for audio input")
         
         # Start a thread to detect silence and stop recording
         threading.Thread(target=self._listen_and_process, daemon=True).start()
@@ -83,6 +88,7 @@ class AudioProcessorUI(QObject):
             
             # Process the recording if we're still in listening mode
             if self.is_listening:
+                logger.info("Audio processor finished recording, processing audio")
                 self.process_recording()
                 self.is_listening = False
         except Exception as e:
@@ -131,6 +137,7 @@ class AudioProcessorUI(QObject):
                 logger.error(f"Error writing transcription to file: {e}")
             
             # Emit the transcription signal
+            logger.info("Emitting transcription_ready signal")
             self.transcription_ready.emit(transcription)
             
         except Exception as e:
@@ -143,6 +150,7 @@ class AudioProcessorUI(QObject):
             logger.info("Stopping audio recording")
             self.audio_processor.stop_listening()
             self.is_listening = False
+            logger.info("Audio recording stopped")
             
         except Exception as e:
             logger.error(f"Error stopping audio recording: {e}")

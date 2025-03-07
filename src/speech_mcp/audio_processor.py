@@ -11,7 +11,6 @@ This module provides centralized audio processing functionality including:
 
 import os
 import time
-import logging
 import tempfile
 import threading
 import wave
@@ -19,15 +18,18 @@ import numpy as np
 import pyaudio
 from typing import Optional, List, Tuple, Callable, Any, Dict
 
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__, component="server")
+
 # Import centralized constants
 from speech_mcp.constants import (
     CHUNK, FORMAT, CHANNELS, RATE,
     SILENCE_THRESHOLD, MAX_SILENCE_DURATION, SILENCE_CHECK_INTERVAL,
     START_LISTENING_SOUND, STOP_LISTENING_SOUND
 )
-
-# Setup logging
-logger = logging.getLogger(__name__)
 
 class AudioProcessor:
     """
@@ -79,23 +81,19 @@ class AudioProcessor:
                     # Only consider input devices
                     if max_input_channels > 0:
                         logger.info(f"Found input device: {device_name}")
-                        print(f"Found input device: {device_name}")
                         
                         # Prefer non-default devices as they're often external mics
                         if self.selected_device_index is None or 'default' not in device_name.lower():
                             self.selected_device_index = i
                             logger.info(f"Selected input device: {device_name} (index {i})")
-                            print(f"Using input device: {device_name}")
                 except Exception as e:
                     logger.warning(f"Error checking device {i}: {e}")
             
             if self.selected_device_index is None:
                 logger.warning("No suitable input device found, using default")
-                print("No suitable input device found, using default")
             
         except Exception as e:
             logger.error(f"Error setting up audio: {e}")
-            print(f"Error setting up audio: {e}")
     
     def start_listening(self, callback: Optional[Callable] = None) -> bool:
         """
@@ -119,7 +117,6 @@ class AudioProcessor:
         
         try:
             logger.info("Starting audio recording")
-            print("\nRecording audio... Speak now.")
             
             def audio_callback(in_data, frame_count, time_info, status):
                 try:
@@ -183,7 +180,6 @@ class AudioProcessor:
             
         except Exception as e:
             logger.error(f"Error starting audio stream: {e}")
-            print(f"ERROR: Failed to start audio recording: {e}")
             self.is_listening = False
             return False
     
@@ -209,16 +205,12 @@ class AudioProcessor:
             amplification_factor = 5.0
             amplified_amplitude = min(amplitude * amplification_factor, 1.0)  # Clamp to 1.0 max
             
-            # Log the original and amplified values occasionally for debugging
-            if np.random.random() < 0.01:  # Log roughly 1% of values to avoid flooding logs
-                logger.debug(f"Audio amplitude: original={amplitude:.6f}, amplified={amplified_amplitude:.6f}")
-            
             # Call the audio level callback if provided
             if self.on_audio_level:
                 self.on_audio_level(amplified_amplitude)
             
-        except Exception as e:
-            logger.error(f"Error processing audio for visualization: {e}")
+        except Exception:
+            pass
     
     def _detect_silence(self) -> None:
         """
@@ -229,13 +221,10 @@ class AudioProcessor:
         """
         try:
             # Wait for initial audio to accumulate
-            logger.info("Starting silence detection")
             time.sleep(0.5)
             
             # Initialize silence detection parameters
             silence_duration = 0
-            
-            logger.debug(f"Silence detection parameters: threshold={SILENCE_THRESHOLD}, max_silence={MAX_SILENCE_DURATION}s, check_interval={SILENCE_CHECK_INTERVAL}s")
             
             while self.is_listening and self.stream and silence_duration < MAX_SILENCE_DURATION:
                 if not self.audio_frames or len(self.audio_frames) < 2:
@@ -250,24 +239,17 @@ class AudioProcessor:
                 
                 if current_amplitude < SILENCE_THRESHOLD:
                     silence_duration += SILENCE_CHECK_INTERVAL
-                    # Log only when silence is detected
-                    if silence_duration >= 1.0 and silence_duration % 1.0 < SILENCE_CHECK_INTERVAL:
-                        logger.debug(f"Silence detected for {silence_duration:.1f}s, amplitude: {current_amplitude:.6f}")
                 else:
-                    if silence_duration > 0:
-                        logger.debug(f"Speech resumed after {silence_duration:.1f}s of silence, amplitude: {current_amplitude:.6f}")
                     silence_duration = 0
                 
                 time.sleep(SILENCE_CHECK_INTERVAL)
             
             # If we exited because of silence detection
             if self.is_listening and self.stream:
-                logger.info(f"Silence threshold reached after {silence_duration:.1f}s, stopping recording")
-                print("Silence detected. Processing speech...")
                 self.stop_listening()
             
-        except Exception as e:
-            logger.error(f"Error in silence detection: {e}")
+        except Exception:
+            pass
     
     def stop_listening(self) -> None:
         """
@@ -277,21 +259,17 @@ class AudioProcessor:
             None
         """
         try:
-            logger.info("Stopping audio recording")
             if self.stream:
-                logger.debug(f"Stopping audio stream, stream active: {self.stream.is_active()}")
                 self.stream.stop_stream()
                 self.stream.close()
                 self.stream = None
-                logger.info("Audio stream closed successfully")
                 
                 # Play stop listening notification sound
                 threading.Thread(target=self.play_audio_file, args=(STOP_LISTENING_SOUND,), daemon=True).start()
             
             self.is_listening = False
             
-        except Exception as e:
-            logger.error(f"Error stopping audio stream: {e}")
+        except Exception:
             self.is_listening = False
     
     def get_recorded_audio_path(self) -> Optional[str]:
@@ -302,41 +280,27 @@ class AudioProcessor:
             str: Path to the temporary WAV file, or None if an error occurred
         """
         if not self.audio_frames:
-            logger.warning("No audio frames to process")
             return None
         
         try:
-            logger.info(f"Processing {len(self.audio_frames)} audio frames")
-            
             # Check if we have enough audio data
             total_audio_time = len(self.audio_frames) * (CHUNK / RATE)
-            logger.info(f"Total recorded audio: {total_audio_time:.2f} seconds")
-            
-            if total_audio_time < 0.5:  # Less than half a second of audio
-                logger.warning(f"Audio recording too short ({total_audio_time:.2f}s), may not contain speech")
             
             # Save the recorded audio to a temporary WAV file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
                 temp_audio_path = temp_audio.name
                 
                 # Create a WAV file from the recorded frames
-                logger.debug(f"Creating WAV file at {temp_audio_path}")
                 wf = wave.open(temp_audio_path, 'wb')
                 wf.setnchannels(CHANNELS)
                 wf.setsampwidth(self.pyaudio.get_sample_size(FORMAT))
                 wf.setframerate(RATE)
                 wf.writeframes(b''.join(self.audio_frames))
                 wf.close()
-                
-                # Get file size for logging
-                file_size = os.path.getsize(temp_audio_path)
-                logger.debug(f"WAV file created, size: {file_size} bytes")
             
-            logger.info(f"Audio saved to temporary file: {temp_audio_path}")
             return temp_audio_path
             
-        except Exception as e:
-            logger.error(f"Error saving audio to file: {e}")
+        except Exception:
             return None
     
     def record_audio(self) -> Optional[str]:
@@ -371,10 +335,7 @@ class AudioProcessor:
         """
         try:
             if not os.path.exists(file_path):
-                logger.error(f"Audio file not found: {file_path}")
                 return False
-            
-            logger.debug(f"Playing audio notification: {file_path}")
             
             # Open the wave file
             with wave.open(file_path, 'rb') as wf:
@@ -400,10 +361,8 @@ class AudioProcessor:
                 stream.close()
                 p.terminate()
                 
-                logger.debug("Audio notification played successfully")
                 return True
-        except Exception as e:
-            logger.error(f"Error playing audio notification: {e}")
+        except Exception:
             return False
     
     def get_available_devices(self) -> List[Dict[str, Any]]:
@@ -420,7 +379,6 @@ class AudioProcessor:
                 self._setup_audio()
                 
             if not self.pyaudio:
-                logger.error("PyAudio not initialized")
                 return devices
                 
             # Get all available audio devices
@@ -440,13 +398,12 @@ class AudioProcessor:
                             'channels': max_input_channels,
                             'sample_rate': device_info.get('defaultSampleRate')
                         })
-                except Exception as e:
-                    logger.warning(f"Error getting device info for device {i}: {e}")
+                except Exception:
+                    pass
                     
             return devices
             
-        except Exception as e:
-            logger.error(f"Error getting available devices: {e}")
+        except Exception:
             return devices
     
     def set_device_index(self, device_index: int) -> bool:
@@ -465,24 +422,19 @@ class AudioProcessor:
                 self._setup_audio()
                 
             if not self.pyaudio:
-                logger.error("PyAudio not initialized")
                 return False
                 
             try:
                 device_info = self.pyaudio.get_device_info_by_host_api_device_index(0, device_index)
                 if device_info.get('maxInputChannels') > 0:
                     self.selected_device_index = device_index
-                    logger.info(f"Selected input device: {device_info.get('name')} (index {device_index})")
                     return True
                 else:
-                    logger.error(f"Device {device_index} is not an input device")
                     return False
-            except Exception as e:
-                logger.error(f"Error setting device index {device_index}: {e}")
+            except Exception:
                 return False
                 
-        except Exception as e:
-            logger.error(f"Error setting device index: {e}")
+        except Exception:
             return False
     
     def cleanup(self) -> None:
@@ -501,7 +453,5 @@ class AudioProcessor:
                 self.pyaudio.terminate()
                 self.pyaudio = None
                 
-            logger.info("Audio processor resources cleaned up")
-            
-        except Exception as e:
-            logger.error(f"Error cleaning up audio processor: {e}")
+        except Exception:
+            pass

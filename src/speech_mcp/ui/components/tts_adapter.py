@@ -6,17 +6,19 @@ This module provides a PyQt wrapper around the TTS adapters.
 
 import os
 import time
-import logging
 import threading
 import random
 import math
 from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__, component="tts")
+
 # Import centralized constants
 from speech_mcp.constants import ENV_TTS_VOICE
-
-# Setup logging
-logger = logging.getLogger(__name__)
 
 class TTSAdapter(QObject):
     """
@@ -69,6 +71,23 @@ class TTSAdapter(QObject):
                         raise ImportError("pyttsx3 initialization failed")
                 except ImportError as e:
                     logger.error(f"Failed to initialize pyttsx3 TTS adapter: {e}")
+                    self.tts_engine = None
+            except Exception as e:
+                logger.error(f"Error initializing Kokoro: {e}")
+                # Fall back to pyttsx3
+                try:
+                    logger.info("Falling back to pyttsx3 TTS adapter")
+                    self.tts_engine = Pyttsx3TTS()
+                    if self.tts_engine.is_initialized:
+                        logger.info("pyttsx3 TTS adapter initialized successfully")
+                    else:
+                        logger.warning("pyttsx3 TTS adapter initialization failed")
+                        raise ImportError("pyttsx3 initialization failed")
+                except ImportError as e:
+                    logger.error(f"Failed to initialize pyttsx3 TTS adapter: {e}")
+                    self.tts_engine = None
+                except Exception as e:
+                    logger.error(f"Error initializing pyttsx3: {e}")
                     self.tts_engine = None
             
             # If we have a TTS engine, get the available voices
@@ -132,7 +151,6 @@ class TTSAdapter(QObject):
             self.is_speaking = True
         
         logger.info(f"TTSAdapter.speak called with text: {text[:50]}{'...' if len(text) > 50 else ''}")
-        print(f"TTSAdapter.speak called with text: {text[:50]}{'...' if len(text) > 50 else ''}")
         
         # Emit speaking started signal on the main thread
         self.speaking_started.emit()
@@ -140,7 +158,7 @@ class TTSAdapter(QObject):
         # Start speaking in a separate thread
         speak_thread = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
         speak_thread.start()
-        logger.info("Started _speak_thread")
+        logger.debug("Started _speak_thread")
         return True
     
     def emit_audio_level(self):
@@ -163,41 +181,31 @@ class TTSAdapter(QObject):
         """Thread function for speaking text"""
         try:
             logger.info(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
-            print(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
             
             # Use the TTS engine's speak method
             if hasattr(self.tts_engine, 'speak'):
                 # This is one of our adapters
                 logger.info("Using TTS adapter speak method")
-                print("Using TTS adapter speak method")
                 try:
                     result = self.tts_engine.speak(text)
                     logger.info(f"TTS speak result: {result}")
-                    print(f"TTS speak result: {result}")
                     if not result:
                         logger.error("TTS failed")
-                        print("TTS failed")
                 except Exception as e:
                     logger.error(f"Exception in TTS speak: {e}", exc_info=True)
-                    print(f"Exception in TTS speak: {e}")
                     result = False
             elif hasattr(self.tts_engine, 'say'):
                 # This is direct pyttsx3
                 logger.info("Using direct pyttsx3 say method")
-                print("Using direct pyttsx3 say method")
                 self.tts_engine.say(text)
                 self.tts_engine.runAndWait()
                 logger.info("pyttsx3 speech completed")
-                print("pyttsx3 speech completed")
             else:
                 logger.error("TTS engine does not have speak or say method")
-                print("TTS engine does not have speak or say method")
             
             logger.info("Speech completed")
-            print("Speech completed")
         except Exception as e:
             logger.error(f"Error during text-to-speech: {e}", exc_info=True)
-            print(f"Error during text-to-speech: {e}")
         finally:
             # Use the lock to safely update the speaking state
             with self._speaking_lock:
@@ -206,9 +214,6 @@ class TTSAdapter(QObject):
             # Emit the signal after releasing the lock
             self.speaking_finished.emit()
             logger.info("Speaking finished signal emitted")
-            print("Speaking finished signal emitted")
-    
-
     
     def set_voice(self, voice_id):
         """Set the voice to use for TTS"""
