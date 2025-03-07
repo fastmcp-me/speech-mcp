@@ -6,14 +6,10 @@ This module provides a PyQt widget for visualizing audio levels and waveforms.
 
 import time
 import math
-import logging
 import random
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QTimer, QRectF
 from PyQt5.QtGui import QPainter, QColor, QPen, QLinearGradient
-
-# Setup logging
-logger = logging.getLogger(__name__)
 
 class AudioVisualizer(QWidget):
     """

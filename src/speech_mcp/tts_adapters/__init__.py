@@ -6,7 +6,6 @@ Each adapter implements a common interface defined by BaseTTSAdapter.
 """
 
 import os
-import logging
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
 
@@ -29,9 +28,6 @@ except ImportError:
     
     def set_env_setting(name, value):
         os.environ[name] = value
-
-# Set up logging
-logger = logging.getLogger(__name__)
 
 class BaseTTSAdapter(ABC):
     """
@@ -57,13 +53,11 @@ class BaseTTSAdapter(ABC):
             env_voice = get_env_setting(ENV_TTS_VOICE)
             if env_voice:
                 voice = env_voice
-                logger.info(f"Using voice from environment variable: {voice}")
             else:
                 # Then try config file
                 config_voice = get_setting("tts", "voice", None)
                 if config_voice:
                     voice = config_voice
-                    logger.info(f"Using voice from config: {voice}")
         
         self.voice = voice
         self.lang_code = lang_code
@@ -106,7 +100,6 @@ class BaseTTSAdapter(ABC):
         try:
             old_voice = self.voice
             self.voice = voice
-            logger.info(f"Voice changed from {old_voice} to {voice}")
             
             # Save the voice preference to config and environment variable
             try:
@@ -115,14 +108,11 @@ class BaseTTSAdapter(ABC):
                 
                 # Save to environment variable
                 set_env_setting(ENV_TTS_VOICE, voice)
-                
-                logger.info(f"Voice preference saved: {voice}")
-            except Exception as e:
-                logger.error(f"Error saving voice preference: {e}")
+            except Exception:
+                pass
             
             return True
-        except Exception as e:
-            logger.error(f"Error setting voice: {e}")
+        except Exception:
             return False
     
     def set_speed(self, speed: float) -> bool:
@@ -136,12 +126,9 @@ class BaseTTSAdapter(ABC):
             bool: True if successful, False otherwise
         """
         try:
-            old_speed = self.speed
             self.speed = speed
-            logger.info(f"Speed changed from {old_speed} to {speed}")
             return True
-        except Exception as e:
-            logger.error(f"Error setting speed: {e}")
+        except Exception:
             return False
 
 
@@ -149,11 +136,9 @@ class BaseTTSAdapter(ABC):
 try:
     from .kokoro_adapter import KokoroTTS
 except ImportError:
-    # Kokoro adapter not available
-    logger.warning("Kokoro TTS adapter not available")
+    pass
 
 try:
     from .pyttsx3_adapter import Pyttsx3TTS
 except ImportError:
-    # pyttsx3 adapter not available
-    logger.warning("pyttsx3 TTS adapter not available")
+    pass

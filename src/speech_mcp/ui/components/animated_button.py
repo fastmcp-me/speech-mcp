@@ -4,12 +4,8 @@ Animated button component for the Speech UI.
 This module provides a PyQt button with press animation effects.
 """
 
-import logging
 from PyQt5.QtWidgets import QPushButton
 from PyQt5.QtCore import QTimer
-
-# Setup logging
-logger = logging.getLogger(__name__)
 
 class AnimatedButton(QPushButton):
     """
