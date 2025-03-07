@@ -1,9 +1,6 @@
 # Speech MCP
 
-A Goose MCP extension for voice interaction with audio visualization.
-
-
-https://github.com/user-attachments/assets/cdbab55b-1f5d-4fff-9ab8-39b485169ac4
+A Goose MCP extension for voice interaction with modern audio visualization.
 
 
 ## Overview
@@ -12,13 +9,16 @@ Speech MCP provides a voice interface for Goose, allowing users to interact thro
 
 - Real-time audio processing for speech recognition
 - Local speech-to-text using faster-whisper (a faster implementation of OpenAI's Whisper model)
-- Text-to-speech capabilities 
+- High-quality text-to-speech with multiple voice options
+- Modern PyQt-based UI with audio visualization
 - Simple command-line interface for voice interaction
 
 ## Features
 
+- **Modern UI**: Sleek PyQt-based interface with audio visualization and dark theme
 - **Voice Input**: Capture and transcribe user speech using faster-whisper
-- **Voice Output**: Convert agent responses to speech
+- **Voice Output**: Convert agent responses to speech with 54+ voice options
+- **Voice Persistence**: Remembers your preferred voice between sessions
 - **Continuous Conversation**: Automatically listen for user input after agent responses
 - **Silence Detection**: Automatically stops recording when the user stops speaking
 - **Robust Error Handling**: Graceful recovery from common failure modes
@@ -63,11 +63,11 @@ goose session --with-extension "python -m speech_mcp"
 ## Dependencies
 
 - Python 3.10+
+- PyQt5 (for modern UI)
 - PyAudio (for audio capture)
 - faster-whisper (for speech-to-text)
 - NumPy (for audio processing)
 - Pydub (for audio processing)
-- pyttsx3 (for text-to-speech)
 - psutil (for process management)
 
 ### Optional Dependencies
@@ -113,6 +113,31 @@ follow_up = reply("Here's my response to your question.")
 reply("I understand your follow-up question. Here's my answer.")
 ```
 
+## UI Features
+
+The new PyQt-based UI includes:
+
+- **Modern Dark Theme**: Sleek, professional appearance
+- **Audio Visualization**: Dynamic visualization of audio input
+- **Voice Selection**: Choose from 54+ voice options
+- **Voice Persistence**: Your voice preference is saved between sessions
+- **Animated Effects**: Smooth animations and visual feedback
+- **Status Indicators**: Clear indication of system state (ready, listening, processing)
+
+## Configuration
+
+User preferences are stored in `~/.config/speech-mcp/config.json` and include:
+
+- Selected TTS voice
+- TTS engine preference
+- Voice speed
+- Language code
+- UI theme settings
+
+You can also set preferences via environment variables, such as:
+- `SPEECH_MCP_TTS_VOICE` - Set your preferred voice
+- `SPEECH_MCP_TTS_ENGINE` - Set your preferred TTS engine
+
 ## Troubleshooting
 
 If you encounter issues with the extension freezing or not responding:
@@ -123,15 +148,15 @@ If you encounter issues with the extension freezing or not responding:
 4. **Check audio devices**: Ensure your microphone is properly configured and accessible to Python.
 5. **Verify dependencies**: Make sure all required dependencies are installed correctly.
 
-## Recent Fixes
+## Recent Improvements
 
-- **Kokoro TTS integration**: Added support for high-quality neural text-to-speech
-- **Improved error handling**: Better recovery from common failure modes
-- **Timeout management**: Reduced timeouts and added fallback mechanisms
-- **Process management**: Better handling of UI process startup and termination
-- **State consistency**: Added state reset mechanisms to avoid getting stuck
-- **Fallback transcription**: Added emergency transcription when UI process fails
-- **Debugging output**: Enhanced logging and console output for troubleshooting
+- **Complete PyQt UI Migration**: Replaced the old Tkinter UI with a modern PyQt implementation
+- **Code Refactoring**: Split UI code into multiple components for better maintainability
+- **Process Management**: Improved process lifecycle management with automatic recovery
+- **Voice Persistence**: Added configuration system for saving user preferences
+- **Enhanced Visualization**: Added dynamic audio visualization with animations
+- **Expanded Voice Options**: Updated to support 54 different voice models
+- **Improved Error Handling**: Better recovery from common failure modes
 
 ## Technical Details
 
