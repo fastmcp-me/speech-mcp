@@ -10,7 +10,8 @@
     "Never commit without user permission",
     "Always show changes first for approval",
     "Don't run server directly - requires installation",
-    "Must be installed in Goose to test"
+    "Must be installed in Goose to test",
+    "Always look for logs in ~/.speech-mcp/logs"
   ],
   "components": [
     {
@@ -66,6 +67,6 @@
     "cli": "goose session --with-extension \"uvx speech-mcp\"",
     "kokoro": "pip install speech-mcp[kokoro]"
   },
-  "logs": ["src/speech_mcp/speech-mcp.log", "src/speech_mcp/speech-mcp-server.log", "src/speech_mcp/speech-mcp-ui.log"],
+  "logs": ["~/.speech-mcp/logs/speech-mcp.log", "~/.speech-mcp/logs/speech-mcp-server.log", "~/.speech-mcp/logs/speech-mcp-ui.log"],
   "config_file": "~/.config/speech-mcp/config.json"
 }

@@ -1,1 +1,1 @@
-include src/speech_mcp/resources/audio/*.wav
+recursive-include src/speech_mcp/resources *

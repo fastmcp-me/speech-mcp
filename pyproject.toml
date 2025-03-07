@@ -1,6 +1,6 @@
 [project]
 name = "speech-mcp"
-version = "1.0.1"
+version = "1.0.10"
 description = "Speech MCP Server with command-line interface and Kokoro TTS support"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,9 @@ dependencies = [
     "soundfile",       # For audio file handling
     "torch",           # Required by Kokoro
     "misaki[en]",      # G2P library for English
-    "PyQt5>=5.15.0"    # Modern UI toolkit to replace tkinter
+    "PyQt5>=5.15.0",   # Modern UI toolkit to replace tkinter
+    "pydantic>=2.7.2,<3.0.0",  # Explicitly specify Pydantic v2 to resolve conflict
+    "pip"
 ]
 
 [project.optional-dependencies]
@@ -37,7 +39,7 @@ all = [
 speech-mcp = "speech_mcp.__main__:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "wheel", "pip", "uv"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
@@ -45,6 +47,8 @@ include = [
     "src/**/*.py",
     "src/**/resources/**/*",
 ]
+[tool.uv]
+no-build-isolation-package = ["kokoro"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/speech_mcp"]

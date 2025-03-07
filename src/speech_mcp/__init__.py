@@ -33,9 +33,22 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     """Speech MCP: Voice interaction with speech recognition."""
-    logger.info("Starting Speech MCP server...")
-    
     try:
+        # Check if stdin/stdout are available
+        if sys.stdin is None or sys.stdout is None or sys.stdin.closed or sys.stdout.closed:
+            print("Error: stdin or stdout is closed or not available, cannot run MCP server")
+            
+            # Create a special file to indicate the error
+            try:
+                with open(os.path.expanduser("~/.speech-mcp/startup_error.log"), "w") as f:
+                    f.write("Error: stdin or stdout is closed or not available, cannot run MCP server")
+            except Exception:
+                pass
+                
+            sys.exit(1)
+            
+        logger.info("Starting Speech MCP server...")
+        
         parser = argparse.ArgumentParser(
             description="Voice interaction with speech recognition."
         )

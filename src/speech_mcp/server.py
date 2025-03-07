@@ -34,6 +34,92 @@ from speech_mcp.speech_recognition import transcribe_audio as transcribe_audio_f
 
 mcp = FastMCP("speech")
 
+# Define TTS engine variable
+tts_engine = None
+
+# Define initialize_kokoro_tts function before it's used
+def initialize_kokoro_tts():
+    """Initialize Kokoro TTS specifically"""
+    global tts_engine
+    
+    try:
+        # Import the Kokoro TTS adapter
+        from speech_mcp.tts_adapters import KokoroTTS
+        
+        # Try to get voice preference from config or environment
+        voice = None
+        try:
+            from speech_mcp.config import get_setting, get_env_setting
+            
+            # First check environment variable
+            env_voice = get_env_setting(ENV_TTS_VOICE)
+            if env_voice:
+                voice = env_voice
+            else:
+                # Then check config file
+                config_voice = get_setting("tts", "voice", None)
+                if config_voice:
+                    voice = config_voice
+        except ImportError:
+            pass
+        
+        # Initialize Kokoro with default or saved voice settings
+        if voice:
+            tts_engine = KokoroTTS(voice=voice, lang_code="a", speed=1.0)
+        else:
+            tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+        
+        if tts_engine.is_initialized and tts_engine.kokoro_available:
+            logger.info("Kokoro TTS initialized successfully")
+            return True
+        else:
+            # If Kokoro initialization failed, set tts_engine to None so we'll try fallback later
+            tts_engine = None
+            logger.warning("Kokoro TTS initialization failed, will use fallback")
+            return False
+            
+    except ImportError as e:
+        logger.error(f"Kokoro TTS import error: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Kokoro TTS initialization error: {e}")
+        return False
+
+# Initialize Kokoro TTS on server start (asynchronously)
+logger.info("Starting asynchronous Kokoro TTS initialization...")
+# Use a thread-safe variable to track initialization status
+import threading
+kokoro_init_lock = threading.Lock()
+kokoro_init_status = {"initialized": False, "in_progress": True}
+
+def async_kokoro_init():
+    """Initialize Kokoro TTS in a background thread"""
+    global kokoro_init_status
+    try:
+        # Attempt to initialize Kokoro
+        result = initialize_kokoro_tts()
+        
+        # Update status with thread safety
+        with kokoro_init_lock:
+            kokoro_init_status["initialized"] = result
+            kokoro_init_status["in_progress"] = False
+        
+        if result:
+            logger.info("Async Kokoro TTS initialization completed successfully")
+        else:
+            logger.warning("Async Kokoro TTS initialization failed, will use fallback when needed")
+    except Exception as e:
+        # Update status with thread safety
+        with kokoro_init_lock:
+            kokoro_init_status["initialized"] = False
+            kokoro_init_status["in_progress"] = False
+        logger.error(f"Error during async Kokoro TTS initialization: {e}")
+
+# Start the initialization in a background thread
+kokoro_init_thread = threading.Thread(target=async_kokoro_init)
+kokoro_init_thread.daemon = True
+kokoro_init_thread.start()
+
 # Load speech state from file or use default
 def load_speech_state():
     try:
@@ -86,9 +172,6 @@ def save_speech_state(state, create_response_file=False):
 # Initialize speech state
 speech_state = load_speech_state()
 
-# TTS engine
-tts_engine = None
-
 def initialize_speech_recognition():
     """Initialize speech recognition"""
     try:
@@ -100,10 +183,23 @@ def initialize_speech_recognition():
 
 def initialize_tts():
     """Initialize text-to-speech"""
-    global tts_engine
+    global tts_engine, kokoro_init_status
     
     if tts_engine is not None:
         return True
+    
+    # Check if Kokoro initialization is still in progress
+    kokoro_in_progress = False
+    with kokoro_init_lock:
+        kokoro_in_progress = kokoro_init_status["in_progress"]
+        kokoro_initialized = kokoro_init_status["initialized"]
+    
+    # If Kokoro initialization completed successfully in the background,
+    # but tts_engine is not set yet, we need to initialize it now
+    if not kokoro_in_progress and kokoro_initialized and tts_engine is None:
+        logger.info("Kokoro was initialized asynchronously, but tts_engine is not set. Reinitializing...")
+        if initialize_kokoro_tts():
+            return True
     
     try:
         # Try to import the TTS adapters
@@ -130,14 +226,16 @@ def initialize_tts():
             
             # First try Kokoro (our primary TTS engine)
             try:
-                # Initialize with default or saved voice settings
-                if voice:
-                    tts_engine = KokoroTTS(voice=voice, lang_code="a", speed=1.0)
-                else:
-                    tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
-                
-                if tts_engine.is_initialized:
-                    return True
+                # Only try Kokoro if it's not still initializing
+                if not kokoro_in_progress:
+                    # Initialize with default or saved voice settings
+                    if voice:
+                        tts_engine = KokoroTTS(voice=voice, lang_code="a", speed=1.0)
+                    else:
+                        tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+                    
+                    if tts_engine.is_initialized:
+                        return True
             except ImportError:
                 pass
             except Exception:
@@ -256,7 +354,7 @@ def transcribe_audio(audio_file_path):
 
 def speak_text(text):
     """Speak text using TTS engine"""
-    global tts_engine
+    global tts_engine, kokoro_init_status
     
     if not text:
         raise McpError(
@@ -274,17 +372,42 @@ def speak_text(text):
     save_speech_state(speech_state, False)
     
     try:
-        # Initialize TTS if not already done
+        # Check if Kokoro initialization is in progress
+        kokoro_in_progress = False
+        with kokoro_init_lock:
+            kokoro_in_progress = kokoro_init_status["in_progress"]
+            kokoro_initialized = kokoro_init_status["initialized"]
+        
+        # If Kokoro is still initializing and we don't have a TTS engine yet,
+        # we'll use a fallback immediately rather than waiting
+        if kokoro_in_progress and tts_engine is None:
+            logger.info("Kokoro initialization still in progress, using fallback TTS for now")
+            # Try to initialize a fallback TTS engine
+            try:
+                from speech_mcp.tts_adapters import Pyttsx3TTS
+                tts_engine = Pyttsx3TTS(lang_code="en", speed=1.0)
+            except Exception:
+                # If fallback initialization fails, we'll simulate speech
+                pass
+        
+        # Use the already initialized TTS engine or initialize if needed
         if tts_engine is None:
-            if not initialize_tts():
-                # If TTS initialization fails, simulate speech with a delay
-                speaking_duration = len(text) * 0.05  # 50ms per character
-                time.sleep(speaking_duration)
-                
-                # Update state
-                speech_state["speaking"] = False
-                save_speech_state(speech_state, False)
-                return f"Simulated speaking: {text}"
+            # First check if Kokoro initialization completed successfully
+            if not kokoro_in_progress and kokoro_initialized:
+                # Kokoro was initialized successfully in the background
+                logger.info("Using Kokoro TTS that was initialized asynchronously")
+                # No need to initialize again, the global tts_engine should be set
+            else:
+                # If Kokoro initialization failed or is still in progress, try the general TTS initialization
+                if not initialize_tts():
+                    # If all TTS initialization fails, simulate speech with a delay
+                    speaking_duration = len(text) * 0.05  # 50ms per character
+                    time.sleep(speaking_duration)
+                    
+                    # Update state
+                    speech_state["speaking"] = False
+                    save_speech_state(speech_state, False)
+                    return f"Simulated speaking: {text}"
         
         # Use TTS engine to speak text directly without going through the UI
         tts_start = time.time()
@@ -829,6 +952,7 @@ def usage_guide() -> str:
     ## Tips
     
     - For best results, use a quiet environment and speak clearly
+    - Kokoro TTS is automatically initialized on server start for faster response times
     - Use the `launch_ui()` function to start the visual PyQt interface:
       - The PyQt UI shows when the microphone is active and listening
       - A blue pulsing circle indicates active listening
@@ -862,3 +986,54 @@ def kokoro_tts_guide() -> str:
         
         For more information, see the documentation in the speech-mcp repository.
         """
+
+@mcp.resource(uri="mcp://speech/auto_initialization")
+def auto_initialization_guide() -> str:
+    """
+    Return information about automatic TTS initialization.
+    """
+    return """
+    # Asynchronous TTS Initialization
+    
+    The speech-mcp extension automatically initializes the Kokoro TTS engine when the server starts,
+    but now does so asynchronously in a background thread. This ensures that voice capabilities are 
+    immediately available without blocking the server startup process.
+    
+    ## How it works
+    
+    1. When the server starts, it launches a background thread to initialize the Kokoro TTS engine
+    2. The server continues to start up and respond to requests while Kokoro initializes
+    3. If a speech request comes in before Kokoro is fully initialized:
+       - The system will use a fallback TTS engine (pyttsx3) temporarily
+       - Once Kokoro initialization completes, it will be used for subsequent requests
+    4. The initialization status is tracked and logged for troubleshooting
+    
+    ## Voice Selection
+    
+    The asynchronous initialization will:
+    
+    1. Check for a voice preference in the environment variable `SPEECH_MCP_TTS_VOICE`
+    2. If not found, check the config file at `~/.config/speech-mcp/config.json`
+    3. If no preference is found, use the default voice "af_heart" (American female)
+    
+    ## Benefits
+    
+    - Server starts up quickly without waiting for TTS initialization
+    - Speech functionality is available immediately using fallback TTS if needed
+    - Kokoro is still used as the primary TTS engine once initialization completes
+    - Smooth transition from fallback to Kokoro without user intervention
+    
+    ## Troubleshooting
+    
+    If you experience issues with TTS initialization, check the logs at:
+    
+    ```
+    ~/.speech-mcp/logs/speech-mcp-server.log
+    ```
+    
+    Common issues include:
+    
+    - Kokoro not installed (install with `pip install kokoro`)
+    - Missing dependencies for Kokoro (torch, soundfile)
+    - Invalid voice selection in config or environment
+    """

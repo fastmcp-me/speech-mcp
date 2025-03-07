@@ -76,6 +76,22 @@ class KokoroTTS(BaseTTSAdapter):
         Returns:
             bool: True if successful, False otherwise
         """
+        # # Check if pip is available
+        # try:
+        #     import pip
+        # except ImportError:
+        #     print("Warning: pip is not available, Kokoro initialization may fail")
+        #     return False
+        #     
+        # Check if stdin/stdout are available (prevent I/O on closed file)
+        try:
+            import sys
+            if sys.stdin.closed or sys.stdout.closed:
+                print("Warning: stdin or stdout is closed, Kokoro initialization may fail")
+                return False
+        except Exception:
+            print("Warning: Error checking stdin/stdout, Kokoro initialization may fail")
+            return False
         try:
             # Check if Kokoro is installed
             if importlib.util.find_spec("kokoro") is not None:
