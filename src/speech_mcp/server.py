@@ -13,6 +13,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__, component="server")
+
 # Import centralized constants
 from speech_mcp.constants import (
     STATE_FILE, DEFAULT_SPEECH_STATE, SERVER_LOG_FILE,
@@ -32,17 +38,22 @@ mcp = FastMCP("speech")
 def load_speech_state():
     try:
         if os.path.exists(STATE_FILE):
+            logger.debug(f"Loading speech state from {STATE_FILE}")
             with open(STATE_FILE, 'r') as f:
                 state = json.load(f)
+                logger.debug(f"Speech state loaded: {state}")
                 return state
         else:
+            logger.debug(f"State file {STATE_FILE} not found, using default state")
             return DEFAULT_SPEECH_STATE.copy()
     except Exception as e:
+        logger.error(f"Error loading speech state: {e}")
         return DEFAULT_SPEECH_STATE.copy()
 
 # Save speech state to file
 def save_speech_state(state, create_response_file=False):
     try:
+        logger.debug(f"Saving speech state to {STATE_FILE}")
         with open(STATE_FILE, 'w') as f:
             json.dump(state, f)
         
@@ -52,6 +63,7 @@ def save_speech_state(state, create_response_file=False):
             # This helps ensure the UI is properly notified of state changes
             if state.get("speaking", False):
                 # If speaking, write the response to the file for the UI to pick up
+                logger.debug(f"Creating response file with text: {state.get('last_response', '')[:30]}...")
                 with open(RESPONSE_FILE, 'w') as f:
                     f.write(state.get("last_response", ""))
         
@@ -64,9 +76,11 @@ def save_speech_state(state, create_response_file=False):
         else:
             command = CMD_IDLE
         
+        logger.debug(f"Writing command {command} to {COMMAND_FILE}")
         with open(COMMAND_FILE, 'w') as f:
             f.write(command)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error saving speech state: {e}")
         pass
 
 # Initialize speech state

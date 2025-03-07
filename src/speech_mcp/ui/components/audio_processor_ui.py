@@ -9,6 +9,12 @@ import time
 import threading
 from PyQt5.QtCore import QObject, pyqtSignal
 
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__, component="stt")
+
 # Import centralized constants
 from speech_mcp.constants import TRANSCRIPTION_FILE
 
@@ -41,22 +47,34 @@ class AudioProcessorUI(QObject):
     def _initialize_speech_recognition(self):
         """Initialize speech recognition in a background thread"""
         try:
+            logger.info("Initializing speech recognition...")
+            
             # Create a speech recognizer instance
             self.speech_recognizer = SpeechRecognizer(model_name="base", device="cpu", compute_type="int8")
-        except Exception:
-            pass
+            
+            if self.speech_recognizer.is_initialized:
+                logger.info("Speech recognition initialized successfully")
+            else:
+                logger.warning("Speech recognition initialization may have failed")
+                
+        except Exception as e:
+            logger.error(f"Error initializing speech recognition: {e}")
     
     def start_listening(self):
         """Start listening for audio input."""
         if self.is_listening:
+            logger.info("Already listening, ignoring start_listening call")
             return
             
         self.is_listening = True
         
         # Start the shared audio processor
         if not self.audio_processor.start_listening():
+            logger.error("Failed to start audio processor")
             self.is_listening = False
             return
+        
+        logger.info("Started listening for audio input")
         
         # Start a thread to detect silence and stop recording
         threading.Thread(target=self._listen_and_process, daemon=True).start()
@@ -70,9 +88,11 @@ class AudioProcessorUI(QObject):
             
             # Process the recording if we're still in listening mode
             if self.is_listening:
+                logger.info("Audio processor finished recording, processing audio")
                 self.process_recording()
                 self.is_listening = False
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error in _listen_and_process: {e}")
             self.is_listening = False
     
     def process_recording(self):
@@ -82,38 +102,56 @@ class AudioProcessorUI(QObject):
             temp_audio_path = self.audio_processor.get_recorded_audio_path()
             
             if not temp_audio_path:
+                logger.warning("No audio data to process")
                 return
+            
+            logger.info(f"Processing audio file: {temp_audio_path}")
             
             # Use the speech recognizer to transcribe the audio
             if self.speech_recognizer and self.speech_recognizer.is_initialized:
+                logger.info("Transcribing audio with speech recognizer...")
+                
                 transcription, metadata = self.speech_recognizer.transcribe(temp_audio_path)
+                
+                # Log the transcription details
+                logger.info(f"Transcription completed: {transcription}")
+                logger.debug(f"Transcription metadata: {metadata}")
             else:
+                logger.error("Speech recognizer not initialized")
                 transcription = "Error: Speech recognition not initialized"
             
             # Clean up the temporary file
             try:
+                logger.debug(f"Removing temporary WAV file: {temp_audio_path}")
                 os.unlink(temp_audio_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Error removing temporary file: {e}")
             
             # Write the transcription to a file for the server to read
             try:
+                logger.debug(f"Writing transcription to file: {TRANSCRIPTION_FILE}")
                 with open(TRANSCRIPTION_FILE, 'w') as f:
                     f.write(transcription)
-            except Exception:
-                pass
+                logger.debug("Transcription file written successfully")
+            except Exception as e:
+                logger.error(f"Error writing transcription to file: {e}")
             
             # Emit the transcription signal
+            logger.info("Emitting transcription_ready signal")
             self.transcription_ready.emit(transcription)
             
         except Exception as e:
+            logger.error(f"Error processing recording: {e}")
             self.transcription_ready.emit(f"Error processing speech: {str(e)}")
     
     def stop_listening(self):
         """Stop listening for audio input."""
         try:
+            logger.info("Stopping audio recording")
             self.audio_processor.stop_listening()
             self.is_listening = False
+            logger.info("Audio recording stopped")
             
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error stopping audio recording: {e}")
             self.is_listening = False

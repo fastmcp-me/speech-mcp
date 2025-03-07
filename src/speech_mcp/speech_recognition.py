@@ -15,6 +15,12 @@ import os
 import time
 from typing import Optional, Tuple, Dict, Any, List, Union
 
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__, component="stt")
+
 class SpeechRecognizer:
     """
     Core speech recognition class that handles transcription of audio files.
@@ -51,10 +57,13 @@ class SpeechRecognizer:
             bool: True if initialization was successful, False otherwise
         """
         if self.is_initialized:
+            logger.info("Speech recognition already initialized")
             return True
         
         # Try to initialize faster-whisper first
         try:
+            logger.info(f"Loading faster-whisper speech recognition model '{self.model_name}' on {self.device}...")
+            
             import faster_whisper
             # Load the model with the specified parameters
             self.whisper_model = faster_whisper.WhisperModel(
@@ -63,12 +72,20 @@ class SpeechRecognizer:
                 compute_type=self.compute_type
             )
             
+            logger.info("faster-whisper model loaded successfully!")
+            
             self.is_initialized = True
             return True
             
-        except ImportError:
+        except ImportError as e:
+            logger.error(f"Failed to load faster-whisper: {e}")
+            logger.info("Trying to fall back to SpeechRecognition library...")
+            
             return self._initialize_speech_recognition_fallback()
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error initializing faster-whisper: {e}")
+            logger.info("Trying to fall back to SpeechRecognition library...")
+            
             return self._initialize_speech_recognition_fallback()
     
     def _initialize_speech_recognition_fallback(self) -> bool:
@@ -79,16 +96,24 @@ class SpeechRecognizer:
             bool: True if initialization was successful, False otherwise
         """
         try:
+            logger.info("Initializing SpeechRecognition fallback...")
             import speech_recognition as sr
             self.sr_recognizer = sr.Recognizer()
+            
+            logger.info("SpeechRecognition library loaded successfully as fallback!")
             
             self.is_initialized = True
             return True
             
-        except ImportError:
+        except ImportError as e:
+            logger.error(f"Failed to load SpeechRecognition: {e}")
+            logger.warning("Please install it with: pip install SpeechRecognition")
+            
             self.is_initialized = False
             return False
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error initializing SpeechRecognition: {e}")
+            
             self.is_initialized = False
             return False
     
@@ -108,16 +133,20 @@ class SpeechRecognizer:
         # Check if the file exists
         if not os.path.exists(audio_file_path):
             error_msg = f"Audio file not found: {audio_file_path}"
+            logger.error(error_msg)
             return "", {"error": error_msg, "engine": "none"}
         
         # Ensure speech recognition is initialized
         if not self.is_initialized and not self._initialize_speech_recognition():
             error_msg = "Failed to initialize speech recognition"
+            logger.error(error_msg)
             return "", {"error": error_msg, "engine": "none"}
         
         # Try faster-whisper first
         if self.whisper_model is not None:
             try:
+                logger.info(f"Transcribing audio with faster-whisper: {audio_file_path}")
+                
                 transcription_start = time.time()
                 segments, info = self.whisper_model.transcribe(audio_file_path, beam_size=5)
                 
@@ -129,6 +158,9 @@ class SpeechRecognizer:
                 transcription = transcription.strip()
                 transcription_time = time.time() - transcription_start
                 
+                logger.info(f"Transcription completed in {transcription_time:.2f}s: {transcription}")
+                logger.debug(f"Transcription info: {info}")
+                
                 # Return the transcription and metadata
                 return transcription, {
                     "engine": "faster-whisper",
@@ -139,13 +171,16 @@ class SpeechRecognizer:
                     "duration": info.duration
                 }
                 
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Error transcribing with faster-whisper: {e}")
+                logger.info("Falling back to SpeechRecognition...")
         
         # Fall back to SpeechRecognition if available
         if self.sr_recognizer is not None:
             try:
                 import speech_recognition as sr
+                
+                logger.info(f"Transcribing audio with SpeechRecognition (fallback): {audio_file_path}")
                 
                 transcription_start = time.time()
                 
@@ -155,6 +190,8 @@ class SpeechRecognizer:
                 
                 transcription_time = time.time() - transcription_start
                 
+                logger.info(f"Fallback transcription completed in {transcription_time:.2f}s: {transcription}")
+                
                 # Return the transcription and metadata
                 return transcription, {
                     "engine": "speech_recognition",
@@ -162,11 +199,13 @@ class SpeechRecognizer:
                     "time_taken": transcription_time
                 }
                 
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Error transcribing with SpeechRecognition: {e}")
         
         # If all methods fail, return an error
         error_msg = "All speech recognition methods failed"
+        logger.error(error_msg)
+        
         return "", {"error": error_msg, "engine": "none"}
     
     def cleanup_audio_file(self, audio_file_path: str) -> bool:
@@ -181,10 +220,12 @@ class SpeechRecognizer:
         """
         try:
             if os.path.exists(audio_file_path):
+                logger.debug(f"Removing temporary audio file: {audio_file_path}")
                 os.unlink(audio_file_path)
                 return True
             return False
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error removing temporary audio file: {e}")
             return False
     
     def get_available_models(self) -> List[Dict[str, Any]]:

@@ -18,6 +18,12 @@ import numpy as np
 import pyaudio
 from typing import Optional, List, Tuple, Callable, Any, Dict
 
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__, component="server")
+
 # Import centralized constants
 from speech_mcp.constants import (
     CHUNK, FORMAT, CHANNELS, RATE,
@@ -50,11 +56,16 @@ class AudioProcessor:
     def _setup_audio(self) -> None:
         """Set up audio capture and processing."""
         try:
+            logger.info("Setting up audio processing")
             self.pyaudio = pyaudio.PyAudio()
+            
+            # Log audio device information
+            logger.info(f"PyAudio version: {pyaudio.get_portaudio_version()}")
             
             # Get all available audio devices
             info = self.pyaudio.get_host_api_info_by_index(0)
             numdevices = info.get('deviceCount')
+            logger.info(f"Found {numdevices} audio devices:")
             
             # Find the best input device
             for i in range(numdevices):
@@ -63,16 +74,26 @@ class AudioProcessor:
                     device_name = device_info.get('name')
                     max_input_channels = device_info.get('maxInputChannels')
                     
+                    logger.info(f"Device {i}: {device_name}")
+                    logger.info(f"  Max Input Channels: {max_input_channels}")
+                    logger.info(f"  Default Sample Rate: {device_info.get('defaultSampleRate')}")
+                    
                     # Only consider input devices
                     if max_input_channels > 0:
+                        logger.info(f"Found input device: {device_name}")
+                        
                         # Prefer non-default devices as they're often external mics
                         if self.selected_device_index is None or 'default' not in device_name.lower():
                             self.selected_device_index = i
-                except Exception:
-                    pass
+                            logger.info(f"Selected input device: {device_name} (index {i})")
+                except Exception as e:
+                    logger.warning(f"Error checking device {i}: {e}")
             
-        except Exception:
-            pass
+            if self.selected_device_index is None:
+                logger.warning("No suitable input device found, using default")
+            
+        except Exception as e:
+            logger.error(f"Error setting up audio: {e}")
     
     def start_listening(self, callback: Optional[Callable] = None) -> bool:
         """
@@ -85,6 +106,7 @@ class AudioProcessor:
             bool: True if listening started successfully, False otherwise
         """
         if self.is_listening:
+            logger.info("Already listening, ignoring start_listening call")
             return True
             
         self.is_listening = True
@@ -94,8 +116,27 @@ class AudioProcessor:
         threading.Thread(target=self.play_audio_file, args=(START_LISTENING_SOUND,), daemon=True).start()
         
         try:
+            logger.info("Starting audio recording")
+            
             def audio_callback(in_data, frame_count, time_info, status):
                 try:
+                    # Check for audio status flags
+                    if status:
+                        status_flags = []
+                        if status & pyaudio.paInputUnderflow:
+                            status_flags.append("Input Underflow")
+                        if status & pyaudio.paInputOverflow:
+                            status_flags.append("Input Overflow")
+                        if status & pyaudio.paOutputUnderflow:
+                            status_flags.append("Output Underflow")
+                        if status & pyaudio.paOutputOverflow:
+                            status_flags.append("Output Overflow")
+                        if status & pyaudio.paPrimingOutput:
+                            status_flags.append("Priming Output")
+                        
+                        if status_flags:
+                            logger.warning(f"Audio callback status flags: {', '.join(status_flags)}")
+                    
                     # Store audio data for processing
                     self.audio_frames.append(in_data)
                     
@@ -108,10 +149,12 @@ class AudioProcessor:
                     
                     return (in_data, pyaudio.paContinue)
                     
-                except Exception:
+                except Exception as e:
+                    logger.error(f"Error in audio callback: {e}")
                     return (in_data, pyaudio.paContinue)  # Try to continue despite errors
             
             # Start the audio stream with the selected device
+            logger.debug(f"Opening audio stream with FORMAT={FORMAT}, CHANNELS={CHANNELS}, RATE={RATE}, CHUNK={CHUNK}, DEVICE={self.selected_device_index}")
             self.stream = self.pyaudio.open(
                 format=FORMAT,
                 channels=CHANNELS,
@@ -124,15 +167,19 @@ class AudioProcessor:
             
             # Verify stream is active and receiving audio
             if not self.stream.is_active():
+                logger.error("Stream created but not active")
                 self.is_listening = False
                 return False
+            
+            logger.info("Audio stream initialized and receiving data")
             
             # Start a thread to detect silence and stop recording
             threading.Thread(target=self._detect_silence, daemon=True).start()
             
             return True
             
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error starting audio stream: {e}")
             self.is_listening = False
             return False
     
