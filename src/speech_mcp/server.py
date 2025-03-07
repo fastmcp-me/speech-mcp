@@ -805,22 +805,27 @@ def start_conversation() -> str:
         return error_message
 
 @mcp.tool()
-def reply(text: str) -> str:
+def reply(text: str, wait_for_response: bool = True) -> str:
     """
-    Speak the provided text and then listen for a response.
+    Speak the provided text and optionally listen for a response.
     
-    This will speak the given text and then immediately start listening for user input.
+    This will speak the given text and then immediately start listening for user input
+    if wait_for_response is True. If wait_for_response is False, it will just speak
+    the text without listening for a response.
     
     Args:
         text: The text to speak to the user
+        wait_for_response: Whether to wait for and return the user's response (default: True)
         
     Returns:
-        The transcription of the user's response.
+        If wait_for_response is True: The transcription of the user's response.
+        If wait_for_response is False: A confirmation message that the text was spoken.
     """
     global speech_state
     
     logger.info(f"reply() called with text ({len(text)} chars): {text[:100]}{'...' if len(text) > 100 else ''}")
     print(f"reply() called with text: {text[:50]}{'...' if len(text) > 50 else ''}")
+    print(f"wait_for_response: {wait_for_response}")
     
     # Reset listening and speaking states to ensure we're in a clean state
     speech_state["listening"] = False
@@ -847,6 +852,12 @@ def reply(text: str) -> str:
         logger.error(f"Error speaking text in reply(): {e}", exc_info=True)
         print(f"ERROR: Error speaking text in reply(): {e}")
         return f"ERROR: Failed to speak text: {str(e)}"
+    
+    # If we don't need to wait for a response, return now
+    if not wait_for_response:
+        logger.info("Not waiting for response as wait_for_response=False")
+        print("INFO: Not waiting for response as wait_for_response=False")
+        return f"Spoke: {text}"
     
     # Check if UI is running but don't launch it automatically
     ui_running = ensure_ui_is_running()
@@ -913,6 +924,93 @@ def reply(text: str) -> str:
         print(f"Returning error message: {error_message}")
         return error_message
 
+@mcp.tool()
+def close_ui() -> str:
+    """
+    Close the speech UI window.
+    
+    This will gracefully shut down the speech UI window if it's currently running.
+    Use this when you're done with voice interaction to clean up resources.
+    
+    Returns:
+        A message indicating whether the UI was successfully closed.
+    """
+    global speech_state
+    
+    logger.info("close_ui() called")
+    print("Closing PyQt speech UI...")
+    
+    # Check if UI is running
+    if speech_state.get("ui_active", False) and speech_state.get("ui_process_id"):
+        try:
+            process_id = speech_state["ui_process_id"]
+            if psutil.pid_exists(process_id):
+                # Check if it's actually our UI process (not just a reused PID)
+                try:
+                    process = psutil.Process(process_id)
+                    cmdline = process.cmdline()
+                    if not any('speech_mcp.ui' in cmd for cmd in cmdline):
+                        logger.warning(f"Process with PID {process_id} exists but is not our UI process")
+                        print(f"Process with PID {process_id} exists but is not our UI process")
+                        # Update state since this isn't our process
+                        speech_state["ui_active"] = False
+                        speech_state["ui_process_id"] = None
+                        save_speech_state(speech_state, False)
+                        return "No active Speech UI found to close (PID was reused by another process)."
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+                
+                logger.info(f"Terminating PyQt UI process with PID {process_id}")
+                print(f"Terminating PyQt UI process with PID {process_id}")
+                
+                # First try to gracefully close the UI by writing a UI_CLOSED command
+                try:
+                    with open(COMMAND_FILE, 'w') as f:
+                        f.write(CMD_UI_CLOSED)
+                    logger.info("Created UI_CLOSED command file")
+                    print("Sent close command to UI")
+                    
+                    # Give the UI a moment to close gracefully
+                    time.sleep(1.0)
+                except Exception as e:
+                    logger.error(f"Error creating command file: {e}")
+                
+                # Now check if the process is still running
+                if psutil.pid_exists(process_id):
+                    # Process is still running, terminate it
+                    process = psutil.Process(process_id)
+                    process.terminate()
+                    try:
+                        process.wait(timeout=3)
+                    except psutil.TimeoutExpired:
+                        logger.warning(f"PyQt UI process {process_id} did not terminate, forcing kill")
+                        print(f"UI process {process_id} did not terminate, forcing kill")
+                        process.kill()
+                else:
+                    logger.info(f"UI process {process_id} closed gracefully")
+                    print(f"UI process {process_id} closed gracefully")
+            else:
+                # Process doesn't exist anymore, just update our state
+                logger.info(f"UI process with PID {process_id} is no longer running")
+                print(f"UI process with PID {process_id} is no longer running")
+            
+            # Update state
+            speech_state["ui_active"] = False
+            speech_state["ui_process_id"] = None
+            save_speech_state(speech_state, False)
+            
+            logger.info("PyQt UI process terminated")
+            print("PyQt UI process terminated")
+            return "Speech UI was closed successfully."
+        except Exception as e:
+            logger.error(f"Error terminating PyQt UI process: {e}")
+            print(f"ERROR: Failed to close PyQt speech UI: {e}")
+            return f"ERROR: Failed to close Speech UI: {str(e)}"
+    else:
+        logger.info("No active UI process found")
+        print("No active UI process found")
+        return "No active Speech UI found to close."
+
 @mcp.resource(uri="mcp://speech/usage_guide")
 def usage_guide() -> str:
     """
@@ -943,6 +1041,18 @@ def usage_guide() -> str:
        user_response = reply("Your response text here")
        ```
        This speaks your response and then listens for the user's reply.
+       
+    4. Speak without waiting for a response:
+       ```
+       reply("This is just an announcement", wait_for_response=False)
+       ```
+       This speaks the text but doesn't listen for a response, useful for announcements or confirmations.
+       
+    5. Close the speech UI when done:
+       ```
+       close_ui()
+       ```
+       This gracefully closes the speech UI window when you're finished with voice interaction.
     
     ## Typical Workflow
     
@@ -965,6 +1075,12 @@ def usage_guide() -> str:
     
     # Process the follow-up and reply again
     reply("I understand your follow-up question. Here's my answer.")
+    
+    # Make an announcement without waiting for a response
+    reply("I'll notify you when the process is complete.", wait_for_response=False)
+    
+    # Close the UI when done with voice interaction
+    close_ui()
     ```
     
     ## Tips
