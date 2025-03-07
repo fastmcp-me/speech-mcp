@@ -7,33 +7,34 @@ import threading
 import tempfile
 import subprocess
 import psutil
+import importlib.util
 from typing import Dict, Optional, Callable
 
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
+# Import centralized constants
+from speech_mcp.constants import (
+    STATE_FILE, DEFAULT_SPEECH_STATE, SERVER_LOG_FILE,
+    TRANSCRIPTION_FILE, RESPONSE_FILE, COMMAND_FILE,
+    CMD_LISTEN, CMD_SPEAK, CMD_IDLE, CMD_UI_READY, CMD_UI_CLOSED,
+    SPEECH_TIMEOUT, ENV_TTS_VOICE
+)
+
+# Import shared audio processor and speech recognition
+from speech_mcp.audio_processor import AudioProcessor
+from speech_mcp.speech_recognition import initialize_speech_recognition as init_speech_recognition
+from speech_mcp.speech_recognition import transcribe_audio as transcribe_audio_file
+
 mcp = FastMCP("speech")
-
-# Path to save speech state
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech_state.json")
-
-# Default speech state
-DEFAULT_SPEECH_STATE = {
-    "listening": False,
-    "speaking": False,
-    "last_transcript": "",
-    "last_response": "",
-    "ui_active": False,
-    "ui_process_id": None
-}
 
 # Set up logging
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech-mcp-server.log")),
+        logging.FileHandler(SERVER_LOG_FILE),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -62,21 +63,19 @@ def save_speech_state(state, create_response_file=False):
         if create_response_file:
             # Create or update response file for UI communication
             # This helps ensure the UI is properly notified of state changes
-            RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
             if state.get("speaking", False):
                 # If speaking, write the response to the file for the UI to pick up
                 with open(RESPONSE_FILE, 'w') as f:
                     f.write(state.get("last_response", ""))
         
         # Create a special command file to signal state changes to the UI
-        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
         command = ""
         if state.get("listening", False):
-            command = "LISTEN"
+            command = CMD_LISTEN
         elif state.get("speaking", False):
-            command = "SPEAK"
+            command = CMD_SPEAK
         else:
-            command = "IDLE"
+            command = CMD_IDLE
         
         with open(COMMAND_FILE, 'w') as f:
             f.write(command)
@@ -88,53 +87,28 @@ def save_speech_state(state, create_response_file=False):
 # Initialize speech state
 speech_state = load_speech_state()
 
-# Audio parameters
-CHUNK = 1024
-FORMAT = None  # Will be set when PyAudio is imported
-CHANNELS = 1
-RATE = 16000
-
-# Speech recognition and TTS engines
-whisper_model = None
+# TTS engine
 tts_engine = None
 
 def initialize_speech_recognition():
     """Initialize speech recognition"""
-    global whisper_model
-    
-    if whisper_model is not None:
-        logger.info("Speech recognition already initialized")
-        return True
+    logger.info("Initializing speech recognition")
     
     try:
-        logger.info("Loading faster-whisper speech recognition model...")
-        print("Loading faster-whisper speech recognition model... This may take a moment.")
+        # Use the centralized speech recognition module
+        result = init_speech_recognition(model_name="base", device="cpu", compute_type="int8")
         
-        import faster_whisper
-        # Load the small model for a good balance of speed and accuracy
-        # Using CPU as default for compatibility
-        whisper_model = faster_whisper.WhisperModel("base", device="cpu", compute_type="int8")
-        
-        logger.info("faster-whisper model loaded successfully")
-        print("faster-whisper speech recognition model loaded successfully!")
-        return True
-    except ImportError as e:
-        logger.error(f"Failed to load faster-whisper: {e}")
-        print(f"ERROR: Failed to load faster-whisper module: {e}")
-        print("Trying to fall back to SpeechRecognition library...")
-        return initialize_speech_recognition_fallback()
-
-def initialize_speech_recognition_fallback():
-    """Initialize fallback speech recognition using SpeechRecognition library"""
-    try:
-        import speech_recognition as sr
-        logger.info("SpeechRecognition successfully loaded")
-        print("SpeechRecognition library loaded successfully!")
-        return True
-    except ImportError as e:
-        logger.error(f"Failed to load SpeechRecognition: {e}")
-        print(f"ERROR: Failed to load SpeechRecognition module: {e}")
-        print("Please install it with: pip install SpeechRecognition")
+        if result:
+            logger.info("Speech recognition initialized successfully")
+            print("Speech recognition initialized successfully!")
+            return True
+        else:
+            logger.error("Failed to initialize speech recognition")
+            print("ERROR: Failed to initialize speech recognition")
+            return False
+    except Exception as e:
+        logger.error(f"Error initializing speech recognition: {e}")
+        print(f"ERROR: Error initializing speech recognition: {e}")
         return False
 
 def initialize_tts():
@@ -145,86 +119,140 @@ def initialize_tts():
         logger.info("TTS already initialized")
         return True
     
-    # Always prioritize Kokoro as the primary TTS engine if available
     try:
-        print("Initializing Kokoro as primary TTS engine...")
-        logger.info("Initializing Kokoro as primary TTS engine")
+        logger.info("Initializing TTS using adapter system")
+        print("Initializing TTS using adapter system...")
         
-        # Import and initialize Kokoro adapter
+        # Try to import the TTS adapters
         try:
-            from speech_mcp.tts_adapters.kokoro_adapter import KokoroTTS
+            # First try to use the new adapter system
+            from speech_mcp.tts_adapters import KokoroTTS, Pyttsx3TTS
             
-            # Initialize with Kokoro voice settings
-            tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
-            logger.info("Kokoro TTS adapter initialized successfully as primary TTS engine")
-            print("Kokoro TTS adapter initialized successfully as primary TTS engine!")
+            # Try to get voice preference from config or environment
+            voice = None
+            try:
+                from speech_mcp.config import get_setting, get_env_setting
+                
+                # First check environment variable
+                env_voice = get_env_setting(ENV_TTS_VOICE)
+                if env_voice:
+                    voice = env_voice
+                    logger.info(f"Using voice from environment variable: {voice}")
+                else:
+                    # Then check config file
+                    config_voice = get_setting("tts", "voice", None)
+                    if config_voice:
+                        voice = config_voice
+                        logger.info(f"Using voice from config: {voice}")
+            except ImportError:
+                logger.info("Config module not available, using default voice")
             
-            # Log available voices
-            voices = tts_engine.get_available_voices()
-            logger.debug(f"Available Kokoro TTS voices: {len(voices)}")
-            for i, voice in enumerate(voices):
-                logger.debug(f"Voice {i}: {voice}")
-            print(f"Available Kokoro voices: {', '.join(voices[:5])}{' and more...' if len(voices) > 5 else ''}")
-            return True
+            # First try Kokoro (our primary TTS engine)
+            try:
+                logger.info("Trying to initialize Kokoro TTS adapter")
+                print("Trying to initialize Kokoro TTS adapter...")
+                
+                # Initialize with default or saved voice settings
+                if voice:
+                    tts_engine = KokoroTTS(voice=voice, lang_code="a", speed=1.0)
+                else:
+                    tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
+                
+                if tts_engine.is_initialized:
+                    logger.info("Kokoro TTS adapter initialized successfully")
+                    print("Kokoro TTS adapter initialized successfully!")
+                    
+                    # Log available voices
+                    voices = tts_engine.get_available_voices()
+                    logger.debug(f"Available Kokoro TTS voices: {len(voices)}")
+                    for i, voice in enumerate(voices):
+                        logger.debug(f"Voice {i}: {voice}")
+                    print(f"Available voices: {', '.join(voices[:5])}{' and more...' if len(voices) > 5 else ''}")
+                    
+                    return True
+                else:
+                    logger.warning("Kokoro TTS adapter initialization failed")
+                    print("Kokoro TTS adapter initialization failed")
+                    # Fall back to pyttsx3
+            except ImportError as e:
+                logger.warning(f"Failed to initialize Kokoro TTS adapter: {e}")
+                print(f"Failed to initialize Kokoro TTS adapter: {e}")
+                # Fall back to pyttsx3
+            except Exception as e:
+                logger.error(f"Error initializing Kokoro: {e}")
+                print(f"Error initializing Kokoro: {e}")
+                # Fall back to pyttsx3
+            
+            # Fall back to pyttsx3 adapter
+            try:
+                logger.info("Falling back to pyttsx3 TTS adapter")
+                print("Falling back to pyttsx3 TTS adapter...")
+                
+                # Initialize with default or saved voice settings
+                if voice and voice.startswith("pyttsx3:"):
+                    tts_engine = Pyttsx3TTS(voice=voice, lang_code="en", speed=1.0)
+                else:
+                    tts_engine = Pyttsx3TTS(lang_code="en", speed=1.0)
+                
+                if tts_engine.is_initialized:
+                    logger.info("pyttsx3 TTS adapter initialized successfully")
+                    print("pyttsx3 TTS adapter initialized successfully!")
+                    
+                    # Log available voices
+                    voices = tts_engine.get_available_voices()
+                    logger.debug(f"Available pyttsx3 TTS voices: {len(voices)}")
+                    for i, voice in enumerate(voices):
+                        logger.debug(f"Voice {i}: {voice}")
+                    print(f"Available voices: {', '.join(voices[:5])}{' and more...' if len(voices) > 5 else ''}")
+                    
+                    return True
+                else:
+                    logger.warning("pyttsx3 TTS adapter initialization failed")
+                    print("pyttsx3 TTS adapter initialization failed")
+            except ImportError as e:
+                logger.warning(f"Failed to initialize pyttsx3 TTS adapter: {e}")
+                print(f"Failed to initialize pyttsx3 TTS adapter: {e}")
+            except Exception as e:
+                logger.error(f"Error initializing pyttsx3: {e}")
+                print(f"Error initializing pyttsx3: {e}")
+        
         except ImportError as e:
-            # If the adapter is available but Kokoro itself is not installed
-            logger.warning(f"Kokoro package not available: {e}. Falling back to pyttsx3.")
-            print("WARNING: Kokoro package not available. Falling back to pyttsx3.")
-            raise ImportError("Kokoro package not installed")
+            logger.warning(f"Failed to import TTS adapters: {e}")
+            print(f"Failed to import TTS adapters: {e}")
         
-    except ImportError as e:
-        logger.warning(f"Kokoro adapter not available: {e}. Falling back to pyttsx3.")
-        print("WARNING: Kokoro adapter not available. Falling back to pyttsx3.")
-        
-        # Fall back to pyttsx3
+        # Direct fallback to pyttsx3 if adapters are not available
         try:
+            logger.info("Falling back to direct pyttsx3 initialization")
+            print("Falling back to direct pyttsx3 initialization...")
             import pyttsx3
             tts_engine = pyttsx3.init()
-            logger.info("pyttsx3 text-to-speech engine initialized as fallback")
-            print("pyttsx3 text-to-speech engine initialized as fallback!")
+            logger.info("pyttsx3 text-to-speech engine initialized directly")
+            print("pyttsx3 text-to-speech engine initialized directly!")
             
             # Log available voices
             voices = tts_engine.getProperty('voices')
             logger.debug(f"Available pyttsx3 voices: {len(voices)}")
             for i, voice in enumerate(voices):
                 logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
+            print(f"Available voices: {', '.join([v.name for v in voices[:5]])}{' and more...' if len(voices) > 5 else ''}")
+            
             return True
         except ImportError as e:
             logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
-            print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
+            print(f"WARNING: pyttsx3 not available: {e}. Text-to-speech will be simulated.")
             return False
         except Exception as e:
             logger.error(f"Error initializing text-to-speech engine: {e}")
             print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
             return False
+            
     except Exception as e:
-        logger.error(f"Error initializing Kokoro TTS adapter: {e}")
-        print(f"WARNING: Error initializing Kokoro TTS adapter: {e}. Falling back to pyttsx3.")
-        
-        # Fall back to pyttsx3
-        try:
-            import pyttsx3
-            tts_engine = pyttsx3.init()
-            logger.info("pyttsx3 text-to-speech engine initialized as fallback")
-            print("pyttsx3 text-to-speech engine initialized as fallback!")
-            
-            # Log available voices
-            voices = tts_engine.getProperty('voices')
-            logger.debug(f"Available pyttsx3 voices: {len(voices)}")
-            for i, voice in enumerate(voices):
-                logger.debug(f"Voice {i}: {voice.id} - {voice.name}")
-            return True
-        except ImportError as e:
-            logger.warning(f"pyttsx3 not available: {e}. Text-to-speech will be simulated.")
-            print("WARNING: pyttsx3 not available. Text-to-speech will be simulated.")
-            return False
-        except Exception as e:
-            logger.error(f"Error initializing text-to-speech engine: {e}")
-            print(f"WARNING: Error initializing text-to-speech: {e}. Text-to-speech will be simulated.")
-            return False
+        logger.error(f"Error initializing TTS: {e}")
+        print(f"ERROR: Error initializing TTS: {e}")
+        return False
 
 def ensure_ui_is_running():
-    """Ensure the UI process is running"""
+    """Ensure the PyQt UI process is running"""
     global speech_state
     
     # Check if UI is already active
@@ -235,7 +263,7 @@ def ensure_ui_is_running():
             if psutil.pid_exists(process_id):
                 process = psutil.Process(process_id)
                 if process.status() != psutil.STATUS_ZOMBIE:
-                    logger.info(f"UI process already running with PID {process_id}")
+                    logger.info(f"PyQt UI process already running with PID {process_id}")
                     return True
         except Exception as e:
             logger.error(f"Error checking UI process: {e}")
@@ -246,9 +274,10 @@ def ensure_ui_is_running():
             try:
                 cmdline = proc.info.get('cmdline', [])
                 if cmdline and len(cmdline) >= 3:
+                    # Look specifically for PyQt UI processes
                     if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
-                        # Found an existing UI process
-                        logger.info(f"Found existing UI process with PID {proc.info['pid']}")
+                        # Found an existing PyQt UI process
+                        logger.info(f"Found existing PyQt UI process with PID {proc.info['pid']}")
                         
                         # Update our state to track this process
                         speech_state["ui_active"] = True
@@ -267,135 +296,22 @@ def ensure_ui_is_running():
 
 def record_audio():
     """Record audio from the microphone and return the audio data"""
-    global FORMAT
-    
     try:
-        import pyaudio
-        import numpy as np
-        
-        if FORMAT is None:
-            FORMAT = pyaudio.paInt16
-        
         logger.info("Starting audio recording")
         print("\nRecording audio... Speak now.")
         
-        # Initialize PyAudio
-        p = pyaudio.PyAudio()
+        # Create an instance of the shared AudioProcessor
+        audio_processor = AudioProcessor()
         
-        # Find the best input device
-        selected_device_index = None
+        # Use the AudioProcessor to record audio
+        audio_file_path = audio_processor.record_audio()
         
-        # Get all available audio devices
-        info = p.get_host_api_info_by_index(0)
-        numdevices = info.get('deviceCount')
-        logger.info(f"Found {numdevices} audio devices:")
+        if not audio_file_path:
+            logger.error("Failed to record audio")
+            raise Exception("Failed to record audio")
         
-        for i in range(numdevices):
-            try:
-                device_info = p.get_device_info_by_host_api_device_index(0, i)
-                device_name = device_info.get('name')
-                max_input_channels = device_info.get('maxInputChannels')
-                
-                logger.info(f"Device {i}: {device_name}")
-                logger.info(f"  Max Input Channels: {max_input_channels}")
-                
-                # Only consider input devices
-                if max_input_channels > 0:
-                    print(f"Found input device: {device_name}")
-                    
-                    # Prefer non-default devices as they're often external mics
-                    if selected_device_index is None or 'default' not in device_name.lower():
-                        selected_device_index = i
-                        logger.info(f"Selected input device: {device_name} (index {i})")
-                        print(f"Using input device: {device_name}")
-            except Exception as e:
-                logger.warning(f"Error checking device {i}: {e}")
-        
-        if selected_device_index is None:
-            logger.warning("No suitable input device found, using default")
-            print("No suitable input device found, using default")
-        
-        # Start recording
-        stream = p.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            input_device_index=selected_device_index,
-            frames_per_buffer=CHUNK
-        )
-        
-        logger.info("Recording started")
-        
-        # Initialize variables for silence detection
-        audio_frames = []
-        silence_threshold = 0.008  # Reduced threshold to be more sensitive to quiet speech
-        silence_duration = 0
-        max_silence = 5.0  # 5 seconds of silence to stop recording (increased from 1.5s)
-        check_interval = 0.1
-        
-        # Record until silence is detected
-        while silence_duration < max_silence:
-            # Read audio chunk
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            audio_frames.append(data)
-            
-            # Process audio for silence detection
-            audio_data = np.frombuffer(data, dtype=np.int16)
-            normalized = audio_data.astype(float) / 32768.0
-            amplitude = np.abs(normalized).mean()
-            
-            # Log amplitude periodically
-            if len(audio_frames) % 20 == 0:
-                logger.debug(f"Current audio amplitude: {amplitude:.6f}")
-                
-                # Ensure UI state is still set to listening
-                if not speech_state.get("listening", False):
-                    speech_state["listening"] = True
-                    save_speech_state(speech_state, False)
-            
-            # Check for silence
-            if amplitude < silence_threshold:
-                silence_duration += check_interval
-                if silence_duration >= 1.0 and silence_duration % 1.0 < check_interval:
-                    logger.debug(f"Silence detected for {silence_duration:.1f}s, amplitude: {amplitude:.6f}")
-            else:
-                if silence_duration > 0:
-                    logger.debug(f"Speech resumed after {silence_duration:.1f}s of silence, amplitude: {amplitude:.6f}")
-                silence_duration = 0
-            
-            time.sleep(check_interval)
-        
-        logger.info(f"Silence threshold reached after {silence_duration:.1f}s, stopping recording")
-        print("Silence detected. Processing speech...")
-        
-        # Stop recording
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-        
-        logger.info(f"Recording stopped, captured {len(audio_frames)} audio frames")
-        
-        # Save the recorded audio to a temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-            temp_audio_path = temp_audio.name
-            
-            # Create a WAV file from the recorded frames
-            logger.debug(f"Creating WAV file at {temp_audio_path}")
-            import wave
-            wf = wave.open(temp_audio_path, 'wb')
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(p.get_sample_size(FORMAT))
-            wf.setframerate(RATE)
-            wf.writeframes(b''.join(audio_frames))
-            wf.close()
-            
-            # Get file size for logging
-            file_size = os.path.getsize(temp_audio_path)
-            logger.debug(f"WAV file created, size: {file_size} bytes")
-        
-        logger.info(f"Audio saved to temporary file: {temp_audio_path}")
-        return temp_audio_path
+        logger.info(f"Audio saved to temporary file: {audio_file_path}")
+        return audio_file_path
     
     except Exception as e:
         logger.error(f"Error recording audio: {e}", exc_info=True)
@@ -403,30 +319,22 @@ def record_audio():
         raise Exception(f"Error recording audio: {str(e)}")
 
 def transcribe_audio(audio_file_path):
-    """Transcribe audio file using faster-whisper"""
-    global whisper_model
-    
+    """Transcribe audio file using the speech recognition module"""
     try:
-        if whisper_model is None:
-            if not initialize_speech_recognition():
-                raise Exception("Failed to initialize speech recognition")
+        if not initialize_speech_recognition():
+            raise Exception("Failed to initialize speech recognition")
         
-        logger.info("Transcribing audio with faster-whisper...")
-        print("Transcribing audio with faster-whisper...")
+        logger.info("Transcribing audio...")
+        print("Transcribing audio...")
         
-        transcription_start = time.time()
-        segments, info = whisper_model.transcribe(audio_file_path, beam_size=5)
+        # Use the centralized speech recognition module
+        transcription = transcribe_audio_file(audio_file_path)
         
-        # Collect all segments to form the complete transcription
-        transcription = ""
-        for segment in segments:
-            transcription += segment.text + " "
+        if not transcription:
+            logger.error("Transcription failed or returned empty result")
+            raise Exception("Transcription failed or returned empty result")
         
-        transcription = transcription.strip()
-        transcription_time = time.time() - transcription_start
-        
-        logger.info(f"Transcription completed in {transcription_time:.2f}s: {transcription}")
-        logger.debug(f"Transcription info: {info}")
+        logger.info(f"Transcription completed: {transcription}")
         print(f"Transcription complete: \"{transcription}\"")
         
         # Clean up the temporary file
@@ -441,21 +349,7 @@ def transcribe_audio(audio_file_path):
     except Exception as e:
         logger.error(f"Error transcribing audio: {e}", exc_info=True)
         print(f"ERROR: Failed to transcribe audio: {e}")
-        
-        # Try fallback if available
-        try:
-            import speech_recognition as sr
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(audio_file_path) as source:
-                audio_data = recognizer.record(source)
-                transcription = recognizer.recognize_google(audio_data)
-                logger.info(f"Fallback transcription completed: {transcription}")
-                print(f"Fallback transcription complete: \"{transcription}\"")
-                return transcription
-        except Exception as fallback_error:
-            logger.error(f"Fallback transcription also failed: {fallback_error}")
-            print(f"ERROR: Fallback transcription also failed: {fallback_error}")
-            raise Exception(f"Error transcribing audio: {str(e)}")
+        raise Exception(f"Error transcribing audio: {str(e)}")
 
 def speak_text(text):
     """Speak text using TTS engine"""
@@ -498,25 +392,33 @@ def speak_text(text):
                 return f"Simulated speaking: {text}"
         
         # Use TTS engine to speak text directly without going through the UI
+        tts_start = time.time()
+        
+        # Use the appropriate method based on the TTS engine type
         if hasattr(tts_engine, 'speak'):
-            # Use the speak method directly (Kokoro adapter)
-            tts_start = time.time()
-            
-            # Speak the text
-            tts_engine.speak(text)
-            tts_duration = time.time() - tts_start
-            logger.info(f"TTS completed in {tts_duration:.2f} seconds")
-            print("Speech completed.")
-        else:
+            # Use the speak method (our adapter system or Kokoro adapter)
+            result = tts_engine.speak(text)
+            if not result:
+                logger.warning("TTS engine speak method returned False")
+                print("Warning: TTS engine speak method returned False")
+        elif hasattr(tts_engine, 'say'):
             # Use pyttsx3 directly
-            tts_start = time.time()
-            
-            # Speak the text
             tts_engine.say(text)
             tts_engine.runAndWait()
-            tts_duration = time.time() - tts_start
-            logger.info(f"Speech completed in {tts_duration:.2f} seconds")
-            print("Speech completed.")
+        else:
+            logger.error("TTS engine does not have speak or say method")
+            print("Error: TTS engine does not have speak or say method")
+            
+            # Simulate speech as fallback
+            speaking_duration = len(text) * 0.05  # 50ms per character
+            logger.debug(f"Simulating speech for {speaking_duration:.2f} seconds")
+            time.sleep(speaking_duration)
+            logger.info("Simulated speech completed")
+            print("Simulated speech completed.")
+        
+        tts_duration = time.time() - tts_start
+        logger.info(f"TTS completed in {tts_duration:.2f} seconds")
+        print("Speech completed.")
         
         # Update state
         speech_state["speaking"] = False
@@ -584,20 +486,20 @@ def listen_for_speech() -> str:
         )
 
 def cleanup_ui_process():
-    """Clean up the UI process when the server shuts down"""
+    """Clean up the PyQt UI process when the server shuts down"""
     global speech_state
     
     if speech_state.get("ui_active", False) and speech_state.get("ui_process_id"):
         try:
             process_id = speech_state["ui_process_id"]
             if psutil.pid_exists(process_id):
-                logger.info(f"Terminating UI process with PID {process_id}")
+                logger.info(f"Terminating PyQt UI process with PID {process_id}")
                 process = psutil.Process(process_id)
                 process.terminate()
                 try:
                     process.wait(timeout=3)
                 except psutil.TimeoutExpired:
-                    logger.warning(f"UI process {process_id} did not terminate, forcing kill")
+                    logger.warning(f"PyQt UI process {process_id} did not terminate, forcing kill")
                     process.kill()
             
             # Update state
@@ -605,9 +507,17 @@ def cleanup_ui_process():
             speech_state["ui_process_id"] = None
             save_speech_state(speech_state, False)
             
-            logger.info("UI process terminated")
+            # Write a UI_CLOSED command to the command file
+            try:
+                with open(COMMAND_FILE, 'w') as f:
+                    f.write(CMD_UI_CLOSED)
+                logger.info("Created UI_CLOSED command file")
+            except Exception as e:
+                logger.error(f"Error creating command file: {e}")
+            
+            logger.info("PyQt UI process terminated")
         except Exception as e:
-            logger.error(f"Error terminating UI process: {e}")
+            logger.error(f"Error terminating PyQt UI process: {e}")
 
 # Register cleanup function to be called on exit
 import atexit
@@ -627,12 +537,33 @@ def launch_ui() -> str:
     global speech_state
     
     logger.info("launch_ui() called")
-    print("Launching speech UI...")
+    print("Launching PyQt speech UI...")
     
     # Check if UI is already running
     if ensure_ui_is_running():
         logger.info("UI is already running, no need to launch")
         return "Speech UI is already running."
+    
+    # Check if a voice preference is saved
+    has_voice_preference = False
+    try:
+        # Import config module if available
+        if importlib.util.find_spec("speech_mcp.config") is not None:
+            from speech_mcp.config import get_setting, get_env_setting
+            
+            # Check environment variable
+            env_voice = get_env_setting(ENV_TTS_VOICE)
+            if env_voice:
+                has_voice_preference = True
+                logger.info(f"Found voice preference in environment variable: {env_voice}")
+            else:
+                # Check config file
+                config_voice = get_setting("tts", "voice", None)
+                if config_voice:
+                    has_voice_preference = True
+                    logger.info(f"Found voice preference in config: {config_voice}")
+    except Exception as e:
+        logger.error(f"Error checking for voice preference: {e}")
     
     # Start a new UI process
     try:
@@ -642,9 +573,10 @@ def launch_ui() -> str:
             try:
                 cmdline = proc.info.get('cmdline', [])
                 if cmdline and len(cmdline) >= 3:
+                    # Look specifically for PyQt UI processes
                     if 'python' in cmdline[0].lower() and '-m' in cmdline[1] and 'speech_mcp.ui' in cmdline[2]:
-                        # Found an existing UI process
-                        logger.info(f"Found existing UI process with PID {proc.info['pid']}")
+                        # Found an existing PyQt UI process
+                        logger.info(f"Found existing PyQt UI process with PID {proc.info['pid']}")
                         existing_ui = True
                         
                         # Update our state to track this process
@@ -652,17 +584,14 @@ def launch_ui() -> str:
                         speech_state["ui_process_id"] = proc.info['pid']
                         save_speech_state(speech_state, False)
                         
-                        return f"Speech UI is already running with PID {proc.info['pid']}."
+                        return f"Speech PyQt UI is already running with PID {proc.info['pid']}."
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
         
         # Start a new UI process if none exists
         if not existing_ui:
-            logger.info("Starting new UI process...")
-            print("Starting speech UI process...")
-            
-            # Create a command file path to check for UI readiness
-            COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
+            logger.info("Starting new PyQt UI process...")
+            print("Starting PyQt speech UI process...")
             
             # Clear any existing command file
             try:
@@ -684,7 +613,7 @@ def launch_ui() -> str:
             speech_state["ui_process_id"] = ui_process.pid
             save_speech_state(speech_state, False)
             
-            logger.info(f"UI process started with PID {ui_process.pid}")
+            logger.info(f"PyQt UI process started with PID {ui_process.pid}")
             print(f"Speech UI started with PID {ui_process.pid}")
             
             # Wait for UI to fully initialize by checking for the UI_READY command
@@ -699,16 +628,16 @@ def launch_ui() -> str:
             while waited_time < max_wait_time:
                 # Check if the process is still running
                 if not psutil.pid_exists(ui_process.pid):
-                    logger.error("UI process terminated unexpectedly")
-                    print("ERROR: UI process terminated unexpectedly")
-                    return "ERROR: UI process terminated unexpectedly."
+                    logger.error("PyQt UI process terminated unexpectedly")
+                    print("ERROR: PyQt UI process terminated unexpectedly")
+                    return "ERROR: PyQt UI process terminated unexpectedly."
                 
                 # Check if the command file exists and contains UI_READY
                 if os.path.exists(COMMAND_FILE):
                     try:
                         with open(COMMAND_FILE, 'r') as f:
                             command = f.read().strip()
-                            if command == "UI_READY":
+                            if command == CMD_UI_READY:
                                 ui_ready = True
                                 logger.info("UI reported ready state")
                                 print("UI is fully initialized and ready!")
@@ -726,15 +655,19 @@ def launch_ui() -> str:
                     print(f"Waiting for UI to initialize: {waited_time:.1f}s elapsed")
             
             if ui_ready:
-                return f"Speech UI launched successfully with PID {ui_process.pid} and is ready."
+                # Check if we have a voice preference
+                if has_voice_preference:
+                    return f"PyQt Speech UI launched successfully with PID {ui_process.pid} and is ready."
+                else:
+                    return f"PyQt Speech UI launched successfully with PID {ui_process.pid}. Please select a voice to continue."
             else:
-                logger.warning(f"UI did not report ready state within {max_wait_time}s, but process is running")
-                print(f"WARNING: UI started but did not report ready state within {max_wait_time}s")
-                return f"Speech UI launched with PID {ui_process.pid}, but readiness state is unknown."
+                logger.warning(f"PyQt UI did not report ready state within {max_wait_time}s, but process is running")
+                print(f"WARNING: PyQt UI started but did not report ready state within {max_wait_time}s")
+                return f"PyQt Speech UI launched with PID {ui_process.pid}, but readiness state is unknown."
     except Exception as e:
-        logger.error(f"Error starting UI process: {e}")
-        print(f"ERROR: Failed to start speech UI: {e}")
-        return f"ERROR: Failed to launch Speech UI: {str(e)}"
+        logger.error(f"Error starting PyQt UI process: {e}")
+        print(f"ERROR: Failed to start PyQt speech UI: {e}")
+        return f"ERROR: Failed to launch PyQt Speech UI: {str(e)}"
 
 @mcp.tool()
 def start_conversation() -> str:
@@ -766,8 +699,8 @@ def start_conversation() -> str:
     # Check if UI is running but don't launch it automatically
     ui_running = ensure_ui_is_running()
     if not ui_running:
-        logger.warning("Speech UI is not running. Use launch_ui() to start it for visual feedback.")
-        print("WARNING: Speech UI is not running. Use launch_ui() for visual feedback.")
+        logger.warning("PyQt Speech UI is not running. Use launch_ui() to start it for visual feedback.")
+        print("WARNING: PyQt Speech UI is not running. Use launch_ui() for visual feedback.")
     
     # Start listening
     try:
@@ -780,10 +713,9 @@ def start_conversation() -> str:
         
         # Create a special command file to signal LISTEN state to the UI
         # This ensures the audio blips are played
-        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
         try:
             with open(COMMAND_FILE, 'w') as f:
-                f.write("LISTEN")
+                f.write(CMD_LISTEN)
             logger.debug("Sent LISTEN command to UI")
         except Exception as e:
             logger.error(f"Error writing LISTEN command: {e}")
@@ -807,11 +739,10 @@ def start_conversation() -> str:
         listen_thread.start()
         
         # Wait for the result with a timeout
-        timeout = 600  # 10 minutes timeout
         try:
-            logger.debug(f"Waiting for transcription with {timeout}s timeout")
-            print(f"DEBUG: Waiting for transcription with {timeout}s timeout")
-            transcription = result_queue.get(timeout=timeout)
+            logger.debug(f"Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            print(f"DEBUG: Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            transcription = result_queue.get(timeout=SPEECH_TIMEOUT)
             logger.info(f"start_conversation() completed successfully with transcription: {transcription}")
             print(f"INFO: start_conversation() completed successfully with transcription: {transcription}")
             
@@ -823,15 +754,15 @@ def start_conversation() -> str:
             # This ensures the audio blips are played
             try:
                 with open(COMMAND_FILE, 'w') as f:
-                    f.write("IDLE")
+                    f.write(CMD_IDLE)
                 logger.debug("Sent IDLE command to UI")
             except Exception as e:
                 logger.error(f"Error writing IDLE command: {e}")
             
             return transcription
         except queue.Empty:
-            logger.error(f"Timeout waiting for transcription after {timeout} seconds")
-            print(f"ERROR: Timeout waiting for transcription after {timeout} seconds")
+            logger.error(f"Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
+            print(f"ERROR: Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
             
             # Update state to stop listening
             speech_state["listening"] = False
@@ -840,13 +771,13 @@ def start_conversation() -> str:
             # Signal that we're done listening
             try:
                 with open(COMMAND_FILE, 'w') as f:
-                    f.write("IDLE")
+                    f.write(CMD_IDLE)
                 logger.debug("Sent IDLE command to UI")
             except Exception as e:
                 logger.error(f"Error writing IDLE command: {e}")
             
             # Create an emergency transcription
-            emergency_message = f"ERROR: Timeout waiting for speech transcription after {timeout} seconds."
+            emergency_message = f"ERROR: Timeout waiting for speech transcription after {SPEECH_TIMEOUT} seconds."
             logger.warning(f"Returning emergency message: {emergency_message}")
             print(f"Returning emergency message: {emergency_message}")
             return emergency_message
@@ -860,10 +791,9 @@ def start_conversation() -> str:
         save_speech_state(speech_state, False)
         
         # Signal that we're done listening
-        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
         try:
             with open(COMMAND_FILE, 'w') as f:
-                f.write("IDLE")
+                f.write(CMD_IDLE)
             logger.debug("Sent IDLE command to UI")
         except Exception as e:
             logger.error(f"Error writing IDLE command: {e}")
@@ -875,22 +805,27 @@ def start_conversation() -> str:
         return error_message
 
 @mcp.tool()
-def reply(text: str) -> str:
+def reply(text: str, wait_for_response: bool = True) -> str:
     """
-    Speak the provided text and then listen for a response.
+    Speak the provided text and optionally listen for a response.
     
-    This will speak the given text and then immediately start listening for user input.
+    This will speak the given text and then immediately start listening for user input
+    if wait_for_response is True. If wait_for_response is False, it will just speak
+    the text without listening for a response.
     
     Args:
         text: The text to speak to the user
+        wait_for_response: Whether to wait for and return the user's response (default: True)
         
     Returns:
-        The transcription of the user's response.
+        If wait_for_response is True: The transcription of the user's response.
+        If wait_for_response is False: A confirmation message that the text was spoken.
     """
     global speech_state
     
     logger.info(f"reply() called with text ({len(text)} chars): {text[:100]}{'...' if len(text) > 100 else ''}")
     print(f"reply() called with text: {text[:50]}{'...' if len(text) > 50 else ''}")
+    print(f"wait_for_response: {wait_for_response}")
     
     # Reset listening and speaking states to ensure we're in a clean state
     speech_state["listening"] = False
@@ -898,7 +833,6 @@ def reply(text: str) -> str:
     save_speech_state(speech_state, False)
     
     # Clear any existing response file to prevent double-speaking
-    RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
     try:
         if os.path.exists(RESPONSE_FILE):
             os.remove(RESPONSE_FILE)
@@ -919,11 +853,17 @@ def reply(text: str) -> str:
         print(f"ERROR: Error speaking text in reply(): {e}")
         return f"ERROR: Failed to speak text: {str(e)}"
     
+    # If we don't need to wait for a response, return now
+    if not wait_for_response:
+        logger.info("Not waiting for response as wait_for_response=False")
+        print("INFO: Not waiting for response as wait_for_response=False")
+        return f"Spoke: {text}"
+    
     # Check if UI is running but don't launch it automatically
     ui_running = ensure_ui_is_running()
     if not ui_running:
-        logger.warning("Speech UI is not running. Use launch_ui() to start it for visual feedback.")
-        print("WARNING: Speech UI is not running. Use launch_ui() for visual feedback.")
+        logger.warning("PyQt Speech UI is not running. Use launch_ui() to start it for visual feedback.")
+        print("WARNING: PyQt Speech UI is not running. Use launch_ui() for visual feedback.")
     
     # Start listening for response
     try:
@@ -949,24 +889,23 @@ def reply(text: str) -> str:
         listen_thread.start()
         
         # Wait for the result with a timeout
-        timeout = 600  # 10 minutes timeout
         try:
-            logger.debug(f"Waiting for transcription with {timeout}s timeout")
-            print(f"DEBUG: Waiting for transcription with {timeout}s timeout")
-            transcription = result_queue.get(timeout=timeout)
+            logger.debug(f"Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            print(f"DEBUG: Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            transcription = result_queue.get(timeout=SPEECH_TIMEOUT)
             logger.info(f"reply() completed successfully with transcription: {transcription}")
             print(f"INFO: reply() completed successfully with transcription: {transcription}")
             return transcription
         except queue.Empty:
-            logger.error(f"Timeout waiting for transcription after {timeout} seconds")
-            print(f"ERROR: Timeout waiting for transcription after {timeout} seconds")
+            logger.error(f"Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
+            print(f"ERROR: Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
             
             # Update state to stop listening
             speech_state["listening"] = False
             save_speech_state(speech_state, False)
             
             # Create an emergency transcription
-            emergency_message = f"ERROR: Timeout waiting for speech transcription after {timeout} seconds."
+            emergency_message = f"ERROR: Timeout waiting for speech transcription after {SPEECH_TIMEOUT} seconds."
             logger.warning(f"Returning emergency message: {emergency_message}")
             print(f"Returning emergency message: {emergency_message}")
             return emergency_message
@@ -984,6 +923,93 @@ def reply(text: str) -> str:
         logger.warning(f"Returning error message: {error_message}")
         print(f"Returning error message: {error_message}")
         return error_message
+
+@mcp.tool()
+def close_ui() -> str:
+    """
+    Close the speech UI window.
+    
+    This will gracefully shut down the speech UI window if it's currently running.
+    Use this when you're done with voice interaction to clean up resources.
+    
+    Returns:
+        A message indicating whether the UI was successfully closed.
+    """
+    global speech_state
+    
+    logger.info("close_ui() called")
+    print("Closing PyQt speech UI...")
+    
+    # Check if UI is running
+    if speech_state.get("ui_active", False) and speech_state.get("ui_process_id"):
+        try:
+            process_id = speech_state["ui_process_id"]
+            if psutil.pid_exists(process_id):
+                # Check if it's actually our UI process (not just a reused PID)
+                try:
+                    process = psutil.Process(process_id)
+                    cmdline = process.cmdline()
+                    if not any('speech_mcp.ui' in cmd for cmd in cmdline):
+                        logger.warning(f"Process with PID {process_id} exists but is not our UI process")
+                        print(f"Process with PID {process_id} exists but is not our UI process")
+                        # Update state since this isn't our process
+                        speech_state["ui_active"] = False
+                        speech_state["ui_process_id"] = None
+                        save_speech_state(speech_state, False)
+                        return "No active Speech UI found to close (PID was reused by another process)."
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+                
+                logger.info(f"Terminating PyQt UI process with PID {process_id}")
+                print(f"Terminating PyQt UI process with PID {process_id}")
+                
+                # First try to gracefully close the UI by writing a UI_CLOSED command
+                try:
+                    with open(COMMAND_FILE, 'w') as f:
+                        f.write(CMD_UI_CLOSED)
+                    logger.info("Created UI_CLOSED command file")
+                    print("Sent close command to UI")
+                    
+                    # Give the UI a moment to close gracefully
+                    time.sleep(1.0)
+                except Exception as e:
+                    logger.error(f"Error creating command file: {e}")
+                
+                # Now check if the process is still running
+                if psutil.pid_exists(process_id):
+                    # Process is still running, terminate it
+                    process = psutil.Process(process_id)
+                    process.terminate()
+                    try:
+                        process.wait(timeout=3)
+                    except psutil.TimeoutExpired:
+                        logger.warning(f"PyQt UI process {process_id} did not terminate, forcing kill")
+                        print(f"UI process {process_id} did not terminate, forcing kill")
+                        process.kill()
+                else:
+                    logger.info(f"UI process {process_id} closed gracefully")
+                    print(f"UI process {process_id} closed gracefully")
+            else:
+                # Process doesn't exist anymore, just update our state
+                logger.info(f"UI process with PID {process_id} is no longer running")
+                print(f"UI process with PID {process_id} is no longer running")
+            
+            # Update state
+            speech_state["ui_active"] = False
+            speech_state["ui_process_id"] = None
+            save_speech_state(speech_state, False)
+            
+            logger.info("PyQt UI process terminated")
+            print("PyQt UI process terminated")
+            return "Speech UI was closed successfully."
+        except Exception as e:
+            logger.error(f"Error terminating PyQt UI process: {e}")
+            print(f"ERROR: Failed to close PyQt speech UI: {e}")
+            return f"ERROR: Failed to close Speech UI: {str(e)}"
+    else:
+        logger.info("No active UI process found")
+        print("No active UI process found")
+        return "No active Speech UI found to close."
 
 @mcp.resource(uri="mcp://speech/usage_guide")
 def usage_guide() -> str:
@@ -1015,6 +1041,18 @@ def usage_guide() -> str:
        user_response = reply("Your response text here")
        ```
        This speaks your response and then listens for the user's reply.
+       
+    4. Speak without waiting for a response:
+       ```
+       reply("This is just an announcement", wait_for_response=False)
+       ```
+       This speaks the text but doesn't listen for a response, useful for announcements or confirmations.
+       
+    5. Close the speech UI when done:
+       ```
+       close_ui()
+       ```
+       This gracefully closes the speech UI window when you're finished with voice interaction.
     
     ## Typical Workflow
     
@@ -1037,15 +1075,22 @@ def usage_guide() -> str:
     
     # Process the follow-up and reply again
     reply("I understand your follow-up question. Here's my answer.")
+    
+    # Make an announcement without waiting for a response
+    reply("I'll notify you when the process is complete.", wait_for_response=False)
+    
+    # Close the UI when done with voice interaction
+    close_ui()
     ```
     
     ## Tips
     
     - For best results, use a quiet environment and speak clearly
-    - Use the `launch_ui()` function to start the visual interface:
-      - The UI shows when the microphone is active and listening
+    - Use the `launch_ui()` function to start the visual PyQt interface:
+      - The PyQt UI shows when the microphone is active and listening
       - A blue pulsing circle indicates active listening
       - A green circle indicates the system is speaking
+      - Voice selection is available in the UI dropdown
       - Only one UI instance can run at a time (prevents duplicates)
     - The system automatically detects silence to know when you've finished speaking
       - Silence detection waits for 5 seconds of quiet before stopping recording

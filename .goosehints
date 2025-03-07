@@ -1,259 +1,71 @@
 {
   "project": {
     "name": "speech-mcp",
-    "description": "Speech MCP extension for Goose that provides voice interaction with audio visualization",
-    "version": "0.3.1",
+    "description": "Goose voice interaction extension with audio visualization",
+    "version": "0.4.0",
     "type": "goose_extension",
     "python_min_version": "3.10"
   },
-  "architecture": {
-    "main_components": [
-      {
-        "name": "server",
-        "path": "src/speech_mcp/server.py",
-        "description": "Main MCP server implementation with FastMCP integration",
-        "responsibilities": ["Manage speech state", "Provide MCP tools", "Control UI process"]
-      },
-      {
-        "name": "ui",
-        "path": "src/speech_mcp/ui/__init__.py",
-        "description": "Speech UI implementation with audio processing and visualization",
-        "responsibilities": ["Audio recording", "Speech recognition", "Text-to-speech", "UI display"]
-      },
-      {
-        "name": "tts_adapters",
-        "path": "src/speech_mcp/tts_adapters/",
-        "description": "Text-to-speech adapters for different TTS engines",
-        "responsibilities": ["Provide unified TTS interface", "Support multiple TTS engines", "Handle fallbacks"]
-      }
-    ],
-    "entry_points": [
-      {
-        "name": "main.py",
-        "description": "Project entry point that imports and calls the main function"
-      },
-      {
-        "name": "__init__.py",
-        "description": "Package initialization with main function definition"
-      },
-      {
-        "name": "__main__.py",
-        "description": "Module entry point for direct execution"
-      },
-      {
-        "name": "ui/__main__.py",
-        "description": "UI module entry point for direct execution"
-      }
-    ]
-  },
-  "api": {
-    "mcp_tools": [
-      {
-        "name": "start_conversation",
-        "description": "Start a voice conversation by launching the UI and beginning to listen",
-        "returns": "Transcription of user's speech",
-        "parameters": []
-      },
-      {
-        "name": "reply",
-        "description": "Speak the provided text and then listen for a response",
-        "parameters": [
-          {
-            "name": "text",
-            "type": "string",
-            "description": "The text to speak to the user"
-          }
-        ],
-        "returns": "Transcription of user's response"
-      }
-    ],
-    "resources": [
-      {
-        "uri": "mcp://speech/usage_guide",
-        "description": "Usage guide for the Speech MCP extension"
-      },
-      {
-        "uri": "mcp://speech/kokoro_tts_adapter",
-        "description": "Documentation for the Kokoro TTS adapter"
-      }
-    ]
-  },
-  "dependencies": {
-    "external": [
-      "mcp[cli]>=1.2.0",
-      "SpeechRecognition>=3.10.0",
-      "numpy>=1.24.0",
-      "pyaudio>=0.2.13",
-      "pydub>=0.25.1",
-      "faster-whisper>=0.10.0",
-      "numba>=0.57.0",
-      "pyttsx3>=2.90",
-      "psutil>=5.9.0"
-    ],
-    "optional": {
-      "kokoro": [
-        "kokoro>=0.8.4",
-        "soundfile",
-        "torch",
-        "misaki[en]"
-      ],
-      "ja": ["misaki[ja]"],
-      "zh": ["misaki[zh]"]
+  "important": [
+    "Never commit without user permission",
+    "Always show changes first for approval",
+    "Don't run server directly - requires installation",
+    "Must be installed in Goose to test"
+  ],
+  "components": [
+    {
+      "name": "server",
+      "path": "src/speech_mcp/server.py",
+      "purpose": "MCP server with FastMCP integration, manages state and UI process"
     },
-    "key_components": {
-      "speech_recognition": {
-        "primary": "faster-whisper",
-        "fallback": "SpeechRecognition"
-      },
-      "audio_processing": ["pyaudio", "numpy", "pydub"],
-      "text_to_speech": {
-        "primary": "kokoro",
-        "fallback": "pyttsx3"
-      }
+    {
+      "name": "ui",
+      "path": "src/speech_mcp/ui/",
+      "purpose": "PyQt UI with audio visualization, voice selection, and TTS"
+    },
+    {
+      "name": "tts_adapters",
+      "path": "src/speech_mcp/tts_adapters/",
+      "purpose": "TTS engine adapters with fallback support"
+    },
+    {
+      "name": "config",
+      "path": "src/speech_mcp/config/",
+      "purpose": "Configuration system for user preferences"
+    },
+    {
+      "name": "process_manager",
+      "path": "src/speech_mcp/process_manager.py",
+      "purpose": "Process lifecycle management with auto-recovery"
     }
-  },
-  "files": {
-    "state": [
-      {
-        "path": "src/speech_mcp/speech_state.json",
-        "description": "Stores the current state of the speech system",
-        "fields": ["ui_active", "ui_process", "listening", "speaking", "last_transcript", "last_response"]
-      },
-      {
-        "path": "src/speech_mcp/transcription.txt",
-        "description": "Temporary file used to pass transcription from UI to server"
-      },
-      {
-        "path": "src/speech_mcp/response.txt",
-        "description": "Temporary file used to pass response text from server to UI for speaking"
-      }
-    ],
-    "logs": [
-      {
-        "path": "src/speech_mcp/speech-mcp.log",
-        "description": "Main log file for the speech MCP"
-      },
-      {
-        "path": "src/speech_mcp/speech-mcp-server.log",
-        "description": "Log file for the server component"
-      },
-      {
-        "path": "src/speech_mcp/speech-mcp-ui.log",
-        "description": "Log file for the UI component"
-      }
-    ]
-  },
-  "workflows": {
-    "conversation": [
-      {
-        "step": 1,
-        "description": "Call start_conversation() to initialize UI and begin listening",
-        "code": "user_input = start_conversation()"
-      },
-      {
-        "step": 2,
-        "description": "Process user input and generate response"
-      },
-      {
-        "step": 3,
-        "description": "Call reply() with response text to speak and listen for next input",
-        "code": "user_response = reply(\"Your response text here\")"
-      },
-      {
-        "step": 4,
-        "description": "Repeat steps 2-3 for continuous conversation"
-      }
-    ]
-  },
-  "tts": {
-    "engines": [
-      {
-        "name": "Kokoro",
-        "priority": 1,
-        "description": "Primary TTS engine with high-quality voice synthesis",
-        "voices": [
-          "af_heart", "af_chill", "af_robot", "af_bright", "af_serious",
-          "am_casual", "am_calm", "am_serious", "am_happy"
-        ],
-        "languages": ["English"],
-        "optional_languages": ["Japanese", "Chinese"],
-        "installation": "pip install speech-mcp[kokoro]"
-      },
-      {
-        "name": "pyttsx3",
-        "priority": 2,
-        "description": "Fallback TTS engine using system voices",
-        "installation": "Included by default"
-      }
-    ]
-  },
-  "recent_fixes": {
-    "kokoro_tts": "Added Kokoro as primary TTS engine with fallback to pyttsx3",
-    "tts_adapters": "Created modular TTS adapter system for multiple engines",
-    "listen_timeout": "Increased timeout from 60s to 10min, reduced silence threshold",
-    "speech_synthesis": "Added pyttsx3 for text-to-speech with fallback to simulation",
-    "ui_startup": "Enhanced error handling, improved process management, fixed path issues",
-    "api_simplification": "Reduced API to just start_conversation() and reply() functions",
-    "speech_recognition": "Migrated from openai-whisper to faster-whisper for improved performance"
-  },
-  "installation": {
-    "methods": [
-      {
-        "name": "goose_deeplink",
-        "url": "goose://extension?cmd=uvx&arg=speech-mcp&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose"
-      },
-      {
-        "name": "goose_cli",
-        "command": "goose session --with-extension \"uvx speech-mcp\""
-      },
-      {
-        "name": "goose_configure",
-        "steps": ["Run goose configure", "Add Extension", "Command-line Extension", "Name: Speech Interface", "Command: uvx speech-mcp"]
-      },
-      {
-        "name": "manual",
-        "steps": ["Clone repository", "pip install -e ."]
-      }
-    ],
-    "kokoro": {
-      "basic": "pip install speech-mcp[kokoro]",
-      "with_japanese": "pip install speech-mcp[kokoro,ja]",
-      "with_chinese": "pip install speech-mcp[kokoro,zh]",
-      "all_languages": "pip install speech-mcp[all]"
+  ],
+  "api": [
+    {
+      "name": "start_conversation",
+      "purpose": "Start UI and begin listening",
+      "returns": "User speech transcription"
+    },
+    {
+      "name": "reply",
+      "purpose": "Speak text and listen for response",
+      "params": ["text: string to speak"],
+      "returns": "User response transcription"
     }
+  ],
+  "dependencies": {
+    "main": ["PyQt5>=5.15.0", "faster-whisper>=0.10.0", "pyaudio>=0.2.13", "pyttsx3>=2.90", "psutil>=5.9.0"],
+    "optional": ["kokoro>=0.8.4", "torch", "misaki[en,ja,zh]"]
   },
-  "troubleshooting": {
-    "log_locations": [
-      "src/speech_mcp/speech-mcp.log",
-      "src/speech_mcp/speech-mcp-server.log",
-      "src/speech_mcp/speech-mcp-ui.log"
-    ],
-    "common_issues": [
-      {
-        "issue": "UI not starting",
-        "check": "ps aux | grep speech_mcp",
-        "solution": "Check logs for errors, ensure dependencies are installed"
-      },
-      {
-        "issue": "Audio not working",
-        "check": "Check audio device settings and permissions",
-        "solution": "Verify PyAudio is correctly installed with audio device access"
-      },
-      {
-        "issue": "Speech recognition failing",
-        "check": "Check if faster-whisper model is downloaded",
-        "solution": "First run may take time to download the model"
-      },
-      {
-        "issue": "Kokoro TTS not working",
-        "check": "Check if Kokoro is installed with 'pip list | grep kokoro'",
-        "solution": "Install Kokoro with 'pip install speech-mcp[kokoro]'"
-      },
-      {
-        "issue": "TTS falling back to pyttsx3",
-        "check": "Check logs for Kokoro initialization errors",
-        "solution": "Ensure all Kokoro dependencies are installed properly"
-      }
-    ]
-  }
+  "features": {
+    "ui": "PyQt dark theme with audio visualization and animations",
+    "tts": "54+ voices via Kokoro with persistence",
+    "stt": "Local speech recognition with faster-whisper"
+  },
+  "install": {
+    "deeplink": "goose://extension?cmd=uvx&arg=speech-mcp&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose",
+    "cli": "goose session --with-extension \"uvx speech-mcp\"",
+    "kokoro": "pip install speech-mcp[kokoro]"
+  },
+  "logs": ["src/speech_mcp/speech-mcp.log", "src/speech_mcp/speech-mcp-server.log", "src/speech_mcp/speech-mcp-ui.log"],
+  "config_file": "~/.config/speech-mcp/config.json"
 }
