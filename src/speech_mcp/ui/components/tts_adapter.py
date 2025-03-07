@@ -137,9 +137,6 @@ class TTSAdapter(QObject):
         # Emit speaking started signal on the main thread
         self.speaking_started.emit()
         
-        # Generate a speech pattern for visualization
-        self.generate_speech_pattern(text)
-        
         # Start speaking in a separate thread
         speak_thread = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
         speak_thread.start()
@@ -147,7 +144,7 @@ class TTSAdapter(QObject):
         return True
     
     def emit_audio_level(self):
-        """Emit simulated audio levels for visualization during speech"""
+        """Emit audio level signal for visualization"""
         # Use the lock to safely check the speaking state
         with self._speaking_lock:
             is_speaking = self.is_speaking
@@ -158,44 +155,9 @@ class TTSAdapter(QObject):
             self.audio_level.emit(0.0)  # Reset to zero when not speaking
             return
         
-        # Check if we have a speech pattern
-        if hasattr(self, 'speech_pattern') and self.speech_pattern:
-            # Get current pattern element
-            if self.pattern_index < len(self.speech_pattern):
-                level, duration = self.speech_pattern[self.pattern_index]
-                
-                # Add some randomness for natural variation
-                variation = 0.1 * math.sin(time.time() * 8.0) + 0.05 * random.random()
-                level = max(0.1, min(0.95, level + variation))
-                
-                # Emit the level
-                self.audio_level.emit(level)
-                
-                # Decrement duration counter
-                if hasattr(self, 'duration_counter'):
-                    self.duration_counter -= 1
-                else:
-                    self.duration_counter = duration
-                
-                # Move to next pattern element when duration is complete
-                if self.duration_counter <= 0:
-                    self.pattern_index += 1
-                    if self.pattern_index < len(self.speech_pattern):
-                        self.duration_counter = self.speech_pattern[self.pattern_index][1]
-            else:
-                # Loop back to beginning if we've reached the end
-                self.pattern_index = 0
-                if self.speech_pattern:
-                    self.duration_counter = self.speech_pattern[0][1]
-        else:
-            # Fallback to random pattern if no speech pattern available
-            t = time.time() * 5.0
-            base_level = 0.5 + 0.2 * math.sin(t * 1.5)
-            variation = 0.3 + 0.15 * math.sin(t * 3.7)
-            level = base_level + random.random() * variation
-            level = max(0.1, min(0.95, level))
-            
-            self.audio_level.emit(level)
+        # When speaking, we don't need to emit actual levels since we're using pre-recorded patterns
+        # Just emit a dummy signal to trigger visualization updates
+        self.audio_level.emit(0.5)
     
     def _speak_thread(self, text):
         """Thread function for speaking text"""
@@ -246,60 +208,7 @@ class TTSAdapter(QObject):
             logger.info("Speaking finished signal emitted")
             print("Speaking finished signal emitted")
     
-    def generate_speech_pattern(self, text):
-        """Generate a speech pattern based on the text content"""
-        import re
-        
-        # Initialize speech pattern
-        self.speech_pattern = []
-        self.pattern_index = 0
-        
-        # Split text into sentences
-        sentences = re.split(r'[.!?]+', text)
-        
-        for sentence in sentences:
-            if not sentence.strip():
-                continue
-                
-            # Split sentence into words
-            words = sentence.strip().split()
-            
-            # Start with medium level
-            self.speech_pattern.append((0.5, 3))  # (level, duration in frames)
-            
-            for word in words:
-                # Word length affects amplitude
-                word_len = len(word)
-                
-                if word_len <= 2:  # Short words
-                    level = 0.3 + 0.1 * word_len
-                    duration = 2
-                elif word_len <= 5:  # Medium words
-                    level = 0.5 + 0.05 * word_len
-                    duration = 3
-                else:  # Long words
-                    level = 0.7 + 0.02 * min(word_len, 15)  # Cap at 15 chars
-                    duration = 4 + min(word_len // 3, 4)  # Longer duration for longer words
-                
-                # Add emphasis for capitalized words
-                if word[0].isupper() and len(word) > 1:
-                    level = min(level * 1.2, 0.95)
-                
-                # Add the word's pattern
-                self.speech_pattern.append((level, duration))
-                
-                # Add a brief pause between words
-                self.speech_pattern.append((0.2, 1))
-            
-            # Add longer pause at end of sentence
-            self.speech_pattern.append((0.1, 5))
-        
-        # Add final trailing off
-        self.speech_pattern.append((0.3, 2))
-        self.speech_pattern.append((0.2, 2))
-        self.speech_pattern.append((0.1, 2))
-        
-        logger.debug(f"Generated speech pattern with {len(self.speech_pattern)} elements")
+
     
     def set_voice(self, voice_id):
         """Set the voice to use for TTS"""

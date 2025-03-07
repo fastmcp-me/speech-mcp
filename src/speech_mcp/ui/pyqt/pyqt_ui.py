@@ -523,11 +523,15 @@ class PyQtSpeechUI(QMainWindow):
         logger.info(f"Testing voice: {current_voice}")
         print(f"Testing voice: {current_voice}")
         
-        # Start the agent animation timer before speaking
+        # Create a dedicated animation timer if it doesn't exist
         if not hasattr(self, 'agent_animation_timer'):
             self.agent_animation_timer = QTimer(self)
             self.agent_animation_timer.timeout.connect(self.animate_agent_visualizer)
-        self.agent_animation_timer.start(50)  # Update every 50ms
+            
+        # Start the timer if it's not already running
+        if not self.agent_animation_timer.isActive():
+            self.agent_animation_timer.start(50)  # Update every 50ms
+            logger.info("Started agent animation timer")
         
         # Activate agent visualizer
         self.set_agent_visualizer_active(True)
@@ -545,20 +549,15 @@ class PyQtSpeechUI(QMainWindow):
                 self.transcription_label.setText("Error: Failed to test voice")
                 QTimer.singleShot(2000, lambda: self.transcription_label.setText("Select a voice and click 'Test Voice' to hear it"))
                 
-                # Stop the animation if speaking failed
-                if hasattr(self, 'agent_animation_timer') and self.agent_animation_timer.isActive():
-                    self.agent_animation_timer.stop()
-                    self.agent_visualizer.update_level(0.0)
+                # Don't deactivate the visualizer here - it will be handled by on_speaking_finished
         except Exception as e:
             logger.error(f"Exception during test voice: {e}", exc_info=True)
             print(f"Exception during test voice: {e}")
             self.transcription_label.setText(f"Error: {str(e)}")
             QTimer.singleShot(3000, lambda: self.transcription_label.setText("Select a voice and click 'Test Voice' to hear it"))
             
-            # Stop the animation if an exception occurred
-            if hasattr(self, 'agent_animation_timer') and self.agent_animation_timer.isActive():
-                self.agent_animation_timer.stop()
-                self.agent_visualizer.update_level(0.0)
+            # Deactivate agent visualizer on error
+            self.set_agent_visualizer_active(False)
     
     def update_audio_level(self, level):
         """Update the user audio level visualization."""
@@ -608,11 +607,15 @@ class PyQtSpeechUI(QMainWindow):
         self.set_agent_visualizer_active(True)
         self.set_user_visualizer_active(False)
         
-        # Start a timer to animate the agent visualizer
+        # Create a dedicated animation timer that won't be stopped by other operations
         if not hasattr(self, 'agent_animation_timer'):
             self.agent_animation_timer = QTimer(self)
             self.agent_animation_timer.timeout.connect(self.animate_agent_visualizer)
-        self.agent_animation_timer.start(50)  # Update every 50ms
+            
+        # Start the timer if it's not already running
+        if not self.agent_animation_timer.isActive():
+            self.agent_animation_timer.start(50)  # Update every 50ms
+            logger.info("Started agent animation timer")
         
     def on_speaking_finished(self):
         """Called when speaking finishes."""
@@ -622,26 +625,17 @@ class PyQtSpeechUI(QMainWindow):
         if hasattr(self, '_speaking_start_time'):
             del self._speaking_start_time
         
-        # Stop the agent animation timer
-        if hasattr(self, 'agent_animation_timer') and self.agent_animation_timer.isActive():
-            self.agent_animation_timer.stop()
-        
-        # Deactivate agent visualizer
+        # Deactivate agent visualizer but keep the timer running
+        # This prevents issues with the timer being stopped and not restarted
         self.set_agent_visualizer_active(False)
+        
+        # Note: We intentionally don't stop the animation timer here
+        # The visualizer's inactive state will show a flat line instead
             
     def animate_agent_visualizer(self):
-        """Animate the agent visualizer with dynamic levels"""
-        # Create a dynamic wave pattern
-        t = time.time() * 5.0
-        base_level = 0.5 + 0.3 * math.sin(t * 1.5)
-        variation = 0.2 * random.random()
-        level = base_level + variation
-        
-        # Ensure level stays within bounds
-        level = max(0.1, min(0.95, level))
-        
-        # Update the agent visualizer
-        self.agent_visualizer.update_level(level)
+        """Animate the agent visualizer with pre-recorded patterns"""
+        # Just trigger an update - the visualizer will use its internal patterns
+        self.agent_visualizer.update_level(0.0)  # The level is ignored for agent mode
     
     def check_for_commands(self):
         """Check for commands from the server."""
@@ -707,12 +701,15 @@ class PyQtSpeechUI(QMainWindow):
                 # Display the response text in the transcription label
                 self.transcription_label.setText(f"Agent: {response}")
                 
-                # Start the agent animation timer before speaking
-                # This ensures the visualization works even if the TTS signal connection fails
+                # Create a dedicated animation timer if it doesn't exist
                 if not hasattr(self, 'agent_animation_timer'):
                     self.agent_animation_timer = QTimer(self)
                     self.agent_animation_timer.timeout.connect(self.animate_agent_visualizer)
-                self.agent_animation_timer.start(50)  # Update every 50ms
+                    
+                # Start the timer if it's not already running
+                if not self.agent_animation_timer.isActive():
+                    self.agent_animation_timer.start(50)  # Update every 50ms
+                    logger.info("Started agent animation timer for response")
                 
                 # Speak the response using the TTS adapter
                 if response:
