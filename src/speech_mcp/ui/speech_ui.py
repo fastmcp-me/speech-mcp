@@ -27,8 +27,9 @@ from speech_mcp.constants import (
     ENV_TTS_VOICE
 )
 
-# Import shared audio processor
+# Import shared audio processor and speech recognition
 from speech_mcp.audio_processor import AudioProcessor
+from speech_mcp.speech_recognition import SpeechRecognizer
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -389,7 +390,7 @@ class AudioProcessorUI(QObject):
     def __init__(self):
         super().__init__()
         self.is_listening = False
-        self.whisper_model = None
+        self.speech_recognizer = None
         
         # Create the shared AudioProcessor with a callback for audio levels
         self.audio_processor = AudioProcessor(on_audio_level=self._on_audio_level)
@@ -404,26 +405,18 @@ class AudioProcessorUI(QObject):
     def _initialize_speech_recognition(self):
         """Initialize speech recognition in a background thread"""
         try:
-            logger.info("Loading faster-whisper speech recognition model...")
+            logger.info("Initializing speech recognition...")
             
-            # Import here to avoid circular imports
-            import faster_whisper
+            # Create a speech recognizer instance
+            self.speech_recognizer = SpeechRecognizer(model_name="base", device="cpu", compute_type="int8")
             
-            # Load the small model for a good balance of speed and accuracy
-            # Using CPU as default for compatibility
-            self.whisper_model = faster_whisper.WhisperModel("base", device="cpu", compute_type="int8")
-            
-            logger.info("faster-whisper model loaded successfully")
+            if self.speech_recognizer.is_initialized:
+                logger.info("Speech recognition initialized successfully")
+            else:
+                logger.warning("Speech recognition initialization may have failed")
+                
         except Exception as e:
-            logger.error(f"Error loading faster-whisper model: {e}")
-            # Try to load speech_recognition as fallback
-            try:
-                import speech_recognition as sr
-                self.sr = sr
-                self.recognizer = sr.Recognizer()
-                logger.info("SpeechRecognition library loaded as fallback")
-            except ImportError:
-                logger.error("Failed to load SpeechRecognition as fallback")
+            logger.error(f"Error initializing speech recognition: {e}")
     
     def start_listening(self):
         """Start listening for audio input."""
@@ -468,37 +461,18 @@ class AudioProcessorUI(QObject):
             
             logger.info(f"Processing audio file: {temp_audio_path}")
             
-            # Use faster-whisper to transcribe the audio
-            if self.whisper_model:
-                logger.info("Transcribing audio with faster-whisper...")
+            # Use the speech recognizer to transcribe the audio
+            if self.speech_recognizer and self.speech_recognizer.is_initialized:
+                logger.info("Transcribing audio with speech recognizer...")
                 
-                transcription_start = time.time()
-                segments, info = self.whisper_model.transcribe(temp_audio_path, beam_size=5)
+                transcription, metadata = self.speech_recognizer.transcribe(temp_audio_path)
                 
-                # Collect all segments to form the complete transcription
-                transcription = ""
-                for segment in segments:
-                    transcription += segment.text + " "
-                
-                transcription = transcription.strip()
-                transcription_time = time.time() - transcription_start
-                
-                logger.info(f"Transcription completed in {transcription_time:.2f}s: {transcription}")
-                logger.debug(f"Transcription info: {info}")
-            
-            # Fallback to SpeechRecognition if whisper_model is not available
-            elif hasattr(self, 'sr') and hasattr(self, 'recognizer'):
-                logger.info("Transcribing audio with SpeechRecognition (fallback)...")
-                
-                with self.sr.AudioFile(temp_audio_path) as source:
-                    audio_data = self.recognizer.record(source)
-                    transcription = self.recognizer.recognize_google(audio_data)
-                
-                logger.info(f"Fallback transcription completed: {transcription}")
-            
+                # Log the transcription details
+                logger.info(f"Transcription completed: {transcription}")
+                logger.debug(f"Transcription metadata: {metadata}")
             else:
-                logger.error("No speech recognition engine available")
-                transcription = "Error: Speech recognition not available"
+                logger.error("Speech recognizer not initialized")
+                transcription = "Error: Speech recognition not initialized"
             
             # Clean up the temporary file
             try:

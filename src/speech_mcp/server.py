@@ -22,8 +22,10 @@ from speech_mcp.constants import (
     SPEECH_TIMEOUT, ENV_TTS_VOICE
 )
 
-# Import shared audio processor
+# Import shared audio processor and speech recognition
 from speech_mcp.audio_processor import AudioProcessor
+from speech_mcp.speech_recognition import initialize_speech_recognition as init_speech_recognition
+from speech_mcp.speech_recognition import transcribe_audio as transcribe_audio_file
 
 mcp = FastMCP("speech")
 
@@ -85,47 +87,28 @@ def save_speech_state(state, create_response_file=False):
 # Initialize speech state
 speech_state = load_speech_state()
 
-# Speech recognition and TTS engines
-whisper_model = None
+# TTS engine
 tts_engine = None
 
 def initialize_speech_recognition():
     """Initialize speech recognition"""
-    global whisper_model
-    
-    if whisper_model is not None:
-        logger.info("Speech recognition already initialized")
-        return True
+    logger.info("Initializing speech recognition")
     
     try:
-        logger.info("Loading faster-whisper speech recognition model...")
-        print("Loading faster-whisper speech recognition model... This may take a moment.")
+        # Use the centralized speech recognition module
+        result = init_speech_recognition(model_name="base", device="cpu", compute_type="int8")
         
-        import faster_whisper
-        # Load the small model for a good balance of speed and accuracy
-        # Using CPU as default for compatibility
-        whisper_model = faster_whisper.WhisperModel("base", device="cpu", compute_type="int8")
-        
-        logger.info("faster-whisper model loaded successfully")
-        print("faster-whisper speech recognition model loaded successfully!")
-        return True
-    except ImportError as e:
-        logger.error(f"Failed to load faster-whisper: {e}")
-        print(f"ERROR: Failed to load faster-whisper module: {e}")
-        print("Trying to fall back to SpeechRecognition library...")
-        return initialize_speech_recognition_fallback()
-
-def initialize_speech_recognition_fallback():
-    """Initialize fallback speech recognition using SpeechRecognition library"""
-    try:
-        import speech_recognition as sr
-        logger.info("SpeechRecognition successfully loaded")
-        print("SpeechRecognition library loaded successfully!")
-        return True
-    except ImportError as e:
-        logger.error(f"Failed to load SpeechRecognition: {e}")
-        print(f"ERROR: Failed to load SpeechRecognition module: {e}")
-        print("Please install it with: pip install SpeechRecognition")
+        if result:
+            logger.info("Speech recognition initialized successfully")
+            print("Speech recognition initialized successfully!")
+            return True
+        else:
+            logger.error("Failed to initialize speech recognition")
+            print("ERROR: Failed to initialize speech recognition")
+            return False
+    except Exception as e:
+        logger.error(f"Error initializing speech recognition: {e}")
+        print(f"ERROR: Error initializing speech recognition: {e}")
         return False
 
 def initialize_tts():
@@ -315,30 +298,22 @@ def record_audio():
         raise Exception(f"Error recording audio: {str(e)}")
 
 def transcribe_audio(audio_file_path):
-    """Transcribe audio file using faster-whisper"""
-    global whisper_model
-    
+    """Transcribe audio file using the speech recognition module"""
     try:
-        if whisper_model is None:
-            if not initialize_speech_recognition():
-                raise Exception("Failed to initialize speech recognition")
+        if not initialize_speech_recognition():
+            raise Exception("Failed to initialize speech recognition")
         
-        logger.info("Transcribing audio with faster-whisper...")
-        print("Transcribing audio with faster-whisper...")
+        logger.info("Transcribing audio...")
+        print("Transcribing audio...")
         
-        transcription_start = time.time()
-        segments, info = whisper_model.transcribe(audio_file_path, beam_size=5)
+        # Use the centralized speech recognition module
+        transcription = transcribe_audio_file(audio_file_path)
         
-        # Collect all segments to form the complete transcription
-        transcription = ""
-        for segment in segments:
-            transcription += segment.text + " "
+        if not transcription:
+            logger.error("Transcription failed or returned empty result")
+            raise Exception("Transcription failed or returned empty result")
         
-        transcription = transcription.strip()
-        transcription_time = time.time() - transcription_start
-        
-        logger.info(f"Transcription completed in {transcription_time:.2f}s: {transcription}")
-        logger.debug(f"Transcription info: {info}")
+        logger.info(f"Transcription completed: {transcription}")
         print(f"Transcription complete: \"{transcription}\"")
         
         # Clean up the temporary file
@@ -353,21 +328,7 @@ def transcribe_audio(audio_file_path):
     except Exception as e:
         logger.error(f"Error transcribing audio: {e}", exc_info=True)
         print(f"ERROR: Failed to transcribe audio: {e}")
-        
-        # Try fallback if available
-        try:
-            import speech_recognition as sr
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(audio_file_path) as source:
-                audio_data = recognizer.record(source)
-                transcription = recognizer.recognize_google(audio_data)
-                logger.info(f"Fallback transcription completed: {transcription}")
-                print(f"Fallback transcription complete: \"{transcription}\"")
-                return transcription
-        except Exception as fallback_error:
-            logger.error(f"Fallback transcription also failed: {fallback_error}")
-            print(f"ERROR: Fallback transcription also failed: {fallback_error}")
-            raise Exception(f"Error transcribing audio: {str(e)}")
+        raise Exception(f"Error transcribing audio: {str(e)}")
 
 def speak_text(text):
     """Speak text using TTS engine"""
