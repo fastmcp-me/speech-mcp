@@ -14,27 +14,25 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
+# Import centralized constants
+from speech_mcp.constants import (
+    STATE_FILE, DEFAULT_SPEECH_STATE, SERVER_LOG_FILE,
+    TRANSCRIPTION_FILE, RESPONSE_FILE, COMMAND_FILE,
+    CMD_LISTEN, CMD_SPEAK, CMD_IDLE, CMD_UI_READY, CMD_UI_CLOSED,
+    SPEECH_TIMEOUT, ENV_TTS_VOICE
+)
+
+# Import shared audio processor
+from speech_mcp.audio_processor import AudioProcessor
+
 mcp = FastMCP("speech")
-
-# Path to save speech state
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech_state.json")
-
-# Default speech state
-DEFAULT_SPEECH_STATE = {
-    "listening": False,
-    "speaking": False,
-    "last_transcript": "",
-    "last_response": "",
-    "ui_active": False,
-    "ui_process_id": None
-}
 
 # Set up logging
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech-mcp-server.log")),
+        logging.FileHandler(SERVER_LOG_FILE),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -63,21 +61,19 @@ def save_speech_state(state, create_response_file=False):
         if create_response_file:
             # Create or update response file for UI communication
             # This helps ensure the UI is properly notified of state changes
-            RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
             if state.get("speaking", False):
                 # If speaking, write the response to the file for the UI to pick up
                 with open(RESPONSE_FILE, 'w') as f:
                     f.write(state.get("last_response", ""))
         
         # Create a special command file to signal state changes to the UI
-        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
         command = ""
         if state.get("listening", False):
-            command = "LISTEN"
+            command = CMD_LISTEN
         elif state.get("speaking", False):
-            command = "SPEAK"
+            command = CMD_SPEAK
         else:
-            command = "IDLE"
+            command = CMD_IDLE
         
         with open(COMMAND_FILE, 'w') as f:
             f.write(command)
@@ -88,12 +84,6 @@ def save_speech_state(state, create_response_file=False):
 
 # Initialize speech state
 speech_state = load_speech_state()
-
-# Audio parameters
-CHUNK = 1024
-FORMAT = None  # Will be set when PyAudio is imported
-CHANNELS = 1
-RATE = 16000
 
 # Speech recognition and TTS engines
 whisper_model = None
@@ -165,7 +155,7 @@ def initialize_tts():
                     voice = None
                     
                     # First check environment variable
-                    env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+                    env_voice = get_env_setting(ENV_TTS_VOICE)
                     if env_voice:
                         voice = env_voice
                         logger.info(f"Using voice from environment variable: {voice}")
@@ -302,135 +292,22 @@ def ensure_ui_is_running():
 
 def record_audio():
     """Record audio from the microphone and return the audio data"""
-    global FORMAT
-    
     try:
-        import pyaudio
-        import numpy as np
-        
-        if FORMAT is None:
-            FORMAT = pyaudio.paInt16
-        
         logger.info("Starting audio recording")
         print("\nRecording audio... Speak now.")
         
-        # Initialize PyAudio
-        p = pyaudio.PyAudio()
+        # Create an instance of the shared AudioProcessor
+        audio_processor = AudioProcessor()
         
-        # Find the best input device
-        selected_device_index = None
+        # Use the AudioProcessor to record audio
+        audio_file_path = audio_processor.record_audio()
         
-        # Get all available audio devices
-        info = p.get_host_api_info_by_index(0)
-        numdevices = info.get('deviceCount')
-        logger.info(f"Found {numdevices} audio devices:")
+        if not audio_file_path:
+            logger.error("Failed to record audio")
+            raise Exception("Failed to record audio")
         
-        for i in range(numdevices):
-            try:
-                device_info = p.get_device_info_by_host_api_device_index(0, i)
-                device_name = device_info.get('name')
-                max_input_channels = device_info.get('maxInputChannels')
-                
-                logger.info(f"Device {i}: {device_name}")
-                logger.info(f"  Max Input Channels: {max_input_channels}")
-                
-                # Only consider input devices
-                if max_input_channels > 0:
-                    print(f"Found input device: {device_name}")
-                    
-                    # Prefer non-default devices as they're often external mics
-                    if selected_device_index is None or 'default' not in device_name.lower():
-                        selected_device_index = i
-                        logger.info(f"Selected input device: {device_name} (index {i})")
-                        print(f"Using input device: {device_name}")
-            except Exception as e:
-                logger.warning(f"Error checking device {i}: {e}")
-        
-        if selected_device_index is None:
-            logger.warning("No suitable input device found, using default")
-            print("No suitable input device found, using default")
-        
-        # Start recording
-        stream = p.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            input_device_index=selected_device_index,
-            frames_per_buffer=CHUNK
-        )
-        
-        logger.info("Recording started")
-        
-        # Initialize variables for silence detection
-        audio_frames = []
-        silence_threshold = 0.008  # Reduced threshold to be more sensitive to quiet speech
-        silence_duration = 0
-        max_silence = 2.0  # 2 seconds of silence to stop recording
-        check_interval = 0.1
-        
-        # Record until silence is detected
-        while silence_duration < max_silence:
-            # Read audio chunk
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            audio_frames.append(data)
-            
-            # Process audio for silence detection
-            audio_data = np.frombuffer(data, dtype=np.int16)
-            normalized = audio_data.astype(float) / 32768.0
-            amplitude = np.abs(normalized).mean()
-            
-            # Log amplitude periodically
-            if len(audio_frames) % 20 == 0:
-                logger.debug(f"Current audio amplitude: {amplitude:.6f}")
-                
-                # Ensure UI state is still set to listening
-                if not speech_state.get("listening", False):
-                    speech_state["listening"] = True
-                    save_speech_state(speech_state, False)
-            
-            # Check for silence
-            if amplitude < silence_threshold:
-                silence_duration += check_interval
-                if silence_duration >= 1.0 and silence_duration % 1.0 < check_interval:
-                    logger.debug(f"Silence detected for {silence_duration:.1f}s, amplitude: {amplitude:.6f}")
-            else:
-                if silence_duration > 0:
-                    logger.debug(f"Speech resumed after {silence_duration:.1f}s of silence, amplitude: {amplitude:.6f}")
-                silence_duration = 0
-            
-            time.sleep(check_interval)
-        
-        logger.info(f"Silence threshold reached after {silence_duration:.1f}s, stopping recording")
-        print("Silence detected. Processing speech...")
-        
-        # Stop recording
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-        
-        logger.info(f"Recording stopped, captured {len(audio_frames)} audio frames")
-        
-        # Save the recorded audio to a temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-            temp_audio_path = temp_audio.name
-            
-            # Create a WAV file from the recorded frames
-            logger.debug(f"Creating WAV file at {temp_audio_path}")
-            import wave
-            wf = wave.open(temp_audio_path, 'wb')
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(p.get_sample_size(FORMAT))
-            wf.setframerate(RATE)
-            wf.writeframes(b''.join(audio_frames))
-            wf.close()
-            
-            # Get file size for logging
-            file_size = os.path.getsize(temp_audio_path)
-            logger.debug(f"WAV file created, size: {file_size} bytes")
-        
-        logger.info(f"Audio saved to temporary file: {temp_audio_path}")
-        return temp_audio_path
+        logger.info(f"Audio saved to temporary file: {audio_file_path}")
+        return audio_file_path
     
     except Exception as e:
         logger.error(f"Error recording audio: {e}", exc_info=True)
@@ -640,6 +517,14 @@ def cleanup_ui_process():
             speech_state["ui_process_id"] = None
             save_speech_state(speech_state, False)
             
+            # Write a UI_CLOSED command to the command file
+            try:
+                with open(COMMAND_FILE, 'w') as f:
+                    f.write(CMD_UI_CLOSED)
+                logger.info("Created UI_CLOSED command file")
+            except Exception as e:
+                logger.error(f"Error creating command file: {e}")
+            
             logger.info("PyQt UI process terminated")
         except Exception as e:
             logger.error(f"Error terminating PyQt UI process: {e}")
@@ -677,7 +562,7 @@ def launch_ui() -> str:
             from speech_mcp.config import get_setting, get_env_setting
             
             # Check environment variable
-            env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+            env_voice = get_env_setting(ENV_TTS_VOICE)
             if env_voice:
                 has_voice_preference = True
                 logger.info(f"Found voice preference in environment variable: {env_voice}")
@@ -717,9 +602,6 @@ def launch_ui() -> str:
         if not existing_ui:
             logger.info("Starting new PyQt UI process...")
             print("Starting PyQt speech UI process...")
-            
-            # Create a command file path to check for UI readiness
-            COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
             
             # Clear any existing command file
             try:
@@ -765,7 +647,7 @@ def launch_ui() -> str:
                     try:
                         with open(COMMAND_FILE, 'r') as f:
                             command = f.read().strip()
-                            if command == "UI_READY":
+                            if command == CMD_UI_READY:
                                 ui_ready = True
                                 logger.info("UI reported ready state")
                                 print("UI is fully initialized and ready!")
@@ -841,10 +723,9 @@ def start_conversation() -> str:
         
         # Create a special command file to signal LISTEN state to the UI
         # This ensures the audio blips are played
-        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
         try:
             with open(COMMAND_FILE, 'w') as f:
-                f.write("LISTEN")
+                f.write(CMD_LISTEN)
             logger.debug("Sent LISTEN command to UI")
         except Exception as e:
             logger.error(f"Error writing LISTEN command: {e}")
@@ -868,11 +749,10 @@ def start_conversation() -> str:
         listen_thread.start()
         
         # Wait for the result with a timeout
-        timeout = 600  # 10 minutes timeout
         try:
-            logger.debug(f"Waiting for transcription with {timeout}s timeout")
-            print(f"DEBUG: Waiting for transcription with {timeout}s timeout")
-            transcription = result_queue.get(timeout=timeout)
+            logger.debug(f"Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            print(f"DEBUG: Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            transcription = result_queue.get(timeout=SPEECH_TIMEOUT)
             logger.info(f"start_conversation() completed successfully with transcription: {transcription}")
             print(f"INFO: start_conversation() completed successfully with transcription: {transcription}")
             
@@ -884,15 +764,15 @@ def start_conversation() -> str:
             # This ensures the audio blips are played
             try:
                 with open(COMMAND_FILE, 'w') as f:
-                    f.write("IDLE")
+                    f.write(CMD_IDLE)
                 logger.debug("Sent IDLE command to UI")
             except Exception as e:
                 logger.error(f"Error writing IDLE command: {e}")
             
             return transcription
         except queue.Empty:
-            logger.error(f"Timeout waiting for transcription after {timeout} seconds")
-            print(f"ERROR: Timeout waiting for transcription after {timeout} seconds")
+            logger.error(f"Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
+            print(f"ERROR: Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
             
             # Update state to stop listening
             speech_state["listening"] = False
@@ -901,13 +781,13 @@ def start_conversation() -> str:
             # Signal that we're done listening
             try:
                 with open(COMMAND_FILE, 'w') as f:
-                    f.write("IDLE")
+                    f.write(CMD_IDLE)
                 logger.debug("Sent IDLE command to UI")
             except Exception as e:
                 logger.error(f"Error writing IDLE command: {e}")
             
             # Create an emergency transcription
-            emergency_message = f"ERROR: Timeout waiting for speech transcription after {timeout} seconds."
+            emergency_message = f"ERROR: Timeout waiting for speech transcription after {SPEECH_TIMEOUT} seconds."
             logger.warning(f"Returning emergency message: {emergency_message}")
             print(f"Returning emergency message: {emergency_message}")
             return emergency_message
@@ -921,10 +801,9 @@ def start_conversation() -> str:
         save_speech_state(speech_state, False)
         
         # Signal that we're done listening
-        COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_command.txt")
         try:
             with open(COMMAND_FILE, 'w') as f:
-                f.write("IDLE")
+                f.write(CMD_IDLE)
             logger.debug("Sent IDLE command to UI")
         except Exception as e:
             logger.error(f"Error writing IDLE command: {e}")
@@ -959,7 +838,6 @@ def reply(text: str) -> str:
     save_speech_state(speech_state, False)
     
     # Clear any existing response file to prevent double-speaking
-    RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "response.txt")
     try:
         if os.path.exists(RESPONSE_FILE):
             os.remove(RESPONSE_FILE)
@@ -1010,24 +888,23 @@ def reply(text: str) -> str:
         listen_thread.start()
         
         # Wait for the result with a timeout
-        timeout = 600  # 10 minutes timeout
         try:
-            logger.debug(f"Waiting for transcription with {timeout}s timeout")
-            print(f"DEBUG: Waiting for transcription with {timeout}s timeout")
-            transcription = result_queue.get(timeout=timeout)
+            logger.debug(f"Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            print(f"DEBUG: Waiting for transcription with {SPEECH_TIMEOUT}s timeout")
+            transcription = result_queue.get(timeout=SPEECH_TIMEOUT)
             logger.info(f"reply() completed successfully with transcription: {transcription}")
             print(f"INFO: reply() completed successfully with transcription: {transcription}")
             return transcription
         except queue.Empty:
-            logger.error(f"Timeout waiting for transcription after {timeout} seconds")
-            print(f"ERROR: Timeout waiting for transcription after {timeout} seconds")
+            logger.error(f"Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
+            print(f"ERROR: Timeout waiting for transcription after {SPEECH_TIMEOUT} seconds")
             
             # Update state to stop listening
             speech_state["listening"] = False
             save_speech_state(speech_state, False)
             
             # Create an emergency transcription
-            emergency_message = f"ERROR: Timeout waiting for speech transcription after {timeout} seconds."
+            emergency_message = f"ERROR: Timeout waiting for speech transcription after {SPEECH_TIMEOUT} seconds."
             logger.warning(f"Returning emergency message: {emergency_message}")
             print(f"Returning emergency message: {emergency_message}")
             return emergency_message

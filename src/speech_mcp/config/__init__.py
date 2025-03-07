@@ -10,32 +10,11 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+# Import centralized constants
+from speech_mcp.constants import CONFIG_DIR, CONFIG_FILE, DEFAULT_CONFIG
+
 # Set up logging
 logger = logging.getLogger(__name__)
-
-# Default configuration directory
-CONFIG_DIR = os.path.join(str(Path.home()), '.config', 'speech-mcp')
-CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
-
-# Default configuration values
-DEFAULT_CONFIG = {
-    'tts': {
-        'engine': 'kokoro',
-        'voice': 'af_heart',
-        'speed': 1.0,
-        'lang_code': 'a'
-    },
-    'stt': {
-        'engine': 'faster-whisper',
-        'model': 'base',
-        'device': 'cpu',
-        'compute_type': 'int8'
-    },
-    'ui': {
-        'theme': 'dark'
-    }
-}
-
 
 def ensure_config_dir() -> None:
     """Ensure the configuration directory exists."""

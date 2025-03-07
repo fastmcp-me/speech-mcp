@@ -23,6 +23,9 @@ import threading
 import importlib.util
 from typing import Optional, Dict, Any, List
 
+# Import centralized constants
+from speech_mcp.constants import ENV_TTS_VOICE
+
 # Import configuration module
 try:
     from speech_mcp.config import get_setting, set_setting, get_env_setting, set_env_setting
@@ -63,7 +66,7 @@ class KokoroTTS:
         # Get voice preference from config or environment variable
         if voice is None:
             # First try environment variable
-            env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+            env_voice = get_env_setting(ENV_TTS_VOICE)
             if env_voice:
                 voice = env_voice
                 logger.info(f"Using voice from environment variable: {voice}")
@@ -337,7 +340,7 @@ class KokoroTTS:
                 set_setting("tts", "voice", voice)
                 
                 # Save to environment variable
-                set_env_setting("SPEECH_MCP_TTS_VOICE", voice)
+                set_env_setting(ENV_TTS_VOICE, voice)
                 
                 logger.info(f"Voice preference saved: {voice}")
             except Exception as e:

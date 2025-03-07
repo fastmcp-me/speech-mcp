@@ -12,7 +12,6 @@ import threading
 import tempfile
 import numpy as np
 import wave
-import pyaudio
 import importlib.util
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
@@ -21,25 +20,18 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, QRectF, Q_ARG
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QLinearGradient
 
+# Import centralized constants
+from speech_mcp.constants import (
+    STATE_FILE, TRANSCRIPTION_FILE, RESPONSE_FILE, COMMAND_FILE,
+    CMD_LISTEN, CMD_SPEAK, CMD_IDLE, CMD_UI_READY, CMD_UI_CLOSED,
+    ENV_TTS_VOICE
+)
+
+# Import shared audio processor
+from speech_mcp.audio_processor import AudioProcessor
+
 # Setup logging
 logger = logging.getLogger(__name__)
-
-# Path to save speech state - same as in server.py
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech_state.json")
-TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "transcription.txt")
-RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "response.txt")
-COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ui_command.txt")
-
-# Audio parameters
-CHUNK = 1024
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
-
-# Path to audio notification files
-AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "audio")
-START_LISTENING_SOUND = os.path.join(AUDIO_DIR, "start_listening.wav")
-STOP_LISTENING_SOUND = os.path.join(AUDIO_DIR, "stop_listening.wav")
 
 class TTSAdapter(QObject):
     """
@@ -81,7 +73,7 @@ class TTSAdapter(QObject):
                         voice = None
                         
                         # First check environment variable
-                        env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+                        env_voice = get_env_setting(ENV_TTS_VOICE)
                         if env_voice:
                             voice = env_voice
                             logger.info(f"Using voice from environment variable: {voice}")
@@ -386,59 +378,10 @@ TRANSCRIPTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".
 RESPONSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "response.txt")
 COMMAND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ui_command.txt")
 
-# Audio parameters
-CHUNK = 1024
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
 
-# Path to audio notification files
-AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "audio")
-START_LISTENING_SOUND = os.path.join(AUDIO_DIR, "start_listening.wav")
-STOP_LISTENING_SOUND = os.path.join(AUDIO_DIR, "stop_listening.wav")
-
-# For playing notification sounds
-def play_audio_file(file_path):
-    """Play an audio file using PyAudio"""
-    try:
-        if not os.path.exists(file_path):
-            logger.error(f"Audio file not found: {file_path}")
-            return
-        
-        logger.debug(f"Playing audio notification: {file_path}")
-        
-        # Open the wave file
-        with wave.open(file_path, 'rb') as wf:
-            # Create PyAudio instance
-            p = pyaudio.PyAudio()
-            
-            # Open stream
-            stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                            channels=wf.getnchannels(),
-                            rate=wf.getframerate(),
-                            output=True)
-            
-            # Read data in chunks and play
-            chunk_size = 1024
-            data = wf.readframes(chunk_size)
-            
-            while data:
-                stream.write(data)
-                data = wf.readframes(chunk_size)
-            
-            # Close stream and PyAudio
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-            
-            logger.debug("Audio notification played successfully")
-    except Exception as e:
-        logger.error(f"Error playing audio notification: {e}")
-
-
-class AudioProcessor(QObject):
+class AudioProcessorUI(QObject):
     """
-    Handles audio processing and speech recognition.
+    UI wrapper for AudioProcessor that handles speech recognition.
     """
     audio_level_updated = pyqtSignal(float)
     transcription_ready = pyqtSignal(str)
@@ -446,57 +389,17 @@ class AudioProcessor(QObject):
     def __init__(self):
         super().__init__()
         self.is_listening = False
-        self.audio_frames = []
-        self.pyaudio = None
-        self.stream = None
-        self.selected_device_index = None
         self.whisper_model = None
-        self._setup_audio()
         
-    def _setup_audio(self):
-        """Set up audio capture and processing."""
-        try:
-            logger.info("Setting up audio processing")
-            self.pyaudio = pyaudio.PyAudio()
-            
-            # Log audio device information
-            logger.info(f"PyAudio version: {pyaudio.get_portaudio_version()}")
-            
-            # Get all available audio devices
-            info = self.pyaudio.get_host_api_info_by_index(0)
-            numdevices = info.get('deviceCount')
-            logger.info(f"Found {numdevices} audio devices:")
-            
-            # Find the best input device
-            for i in range(numdevices):
-                try:
-                    device_info = self.pyaudio.get_device_info_by_host_api_device_index(0, i)
-                    device_name = device_info.get('name')
-                    max_input_channels = device_info.get('maxInputChannels')
-                    
-                    logger.info(f"Device {i}: {device_name}")
-                    logger.info(f"  Max Input Channels: {max_input_channels}")
-                    logger.info(f"  Default Sample Rate: {device_info.get('defaultSampleRate')}")
-                    
-                    # Only consider input devices
-                    if max_input_channels > 0:
-                        logger.info(f"Found input device: {device_name}")
-                        
-                        # Prefer non-default devices as they're often external mics
-                        if self.selected_device_index is None or 'default' not in device_name.lower():
-                            self.selected_device_index = i
-                            logger.info(f"Selected input device: {device_name} (index {i})")
-                except Exception as e:
-                    logger.warning(f"Error checking device {i}: {e}")
-            
-            if self.selected_device_index is None:
-                logger.warning("No suitable input device found, using default")
-            
-            # Initialize speech recognition in a background thread
-            threading.Thread(target=self._initialize_speech_recognition, daemon=True).start()
-            
-        except Exception as e:
-            logger.error(f"Error setting up audio: {e}")
+        # Create the shared AudioProcessor with a callback for audio levels
+        self.audio_processor = AudioProcessor(on_audio_level=self._on_audio_level)
+        
+        # Initialize speech recognition in a background thread
+        threading.Thread(target=self._initialize_speech_recognition, daemon=True).start()
+    
+    def _on_audio_level(self, level):
+        """Callback for audio level updates from the AudioProcessor"""
+        self.audio_level_updated.emit(level)
     
     def _initialize_speech_recognition(self):
         """Initialize speech recognition in a background thread"""
@@ -528,179 +431,42 @@ class AudioProcessor(QObject):
             return
             
         self.is_listening = True
-        self.audio_frames = []
         
-        # Play start listening notification sound
-        threading.Thread(target=play_audio_file, args=(START_LISTENING_SOUND,), daemon=True).start()
-        
-        try:
-            logger.info("Starting audio recording")
-            
-            def audio_callback(in_data, frame_count, time_info, status):
-                try:
-                    # Check for audio status flags
-                    if status:
-                        status_flags = []
-                        if status & pyaudio.paInputUnderflow:
-                            status_flags.append("Input Underflow")
-                        if status & pyaudio.paInputOverflow:
-                            status_flags.append("Input Overflow")
-                        if status & pyaudio.paOutputUnderflow:
-                            status_flags.append("Output Underflow")
-                        if status & pyaudio.paOutputOverflow:
-                            status_flags.append("Output Overflow")
-                        if status & pyaudio.paPrimingOutput:
-                            status_flags.append("Priming Output")
-                        
-                        if status_flags:
-                            logger.warning(f"Audio callback status flags: {', '.join(status_flags)}")
-                    
-                    # Store audio data for processing
-                    self.audio_frames.append(in_data)
-                    
-                    # Process audio for visualization
-                    self._process_audio_for_visualization(in_data)
-                    
-                    return (in_data, pyaudio.paContinue)
-                    
-                except Exception as e:
-                    logger.error(f"Error in audio callback: {e}")
-                    return (in_data, pyaudio.paContinue)  # Try to continue despite errors
-            
-            # Start the audio stream with the selected device
-            logger.debug(f"Opening audio stream with FORMAT={FORMAT}, CHANNELS={CHANNELS}, RATE={RATE}, CHUNK={CHUNK}, DEVICE={self.selected_device_index}")
-            self.stream = self.pyaudio.open(
-                format=FORMAT,
-                channels=CHANNELS,
-                rate=RATE,
-                input=True,
-                input_device_index=self.selected_device_index,
-                frames_per_buffer=CHUNK,
-                stream_callback=audio_callback
-            )
-            
-            # Verify stream is active and receiving audio
-            if not self.stream.is_active():
-                logger.error("Stream created but not active")
-                raise Exception("Audio stream is not active")
-            
-            logger.info("Audio stream initialized and receiving data")
-            
-            # Start a thread to detect silence and stop recording
-            threading.Thread(target=self._detect_silence, daemon=True).start()
-            
-        except Exception as e:
-            logger.error(f"Error starting audio stream: {e}")
+        # Start the shared audio processor
+        if not self.audio_processor.start_listening():
+            logger.error("Failed to start audio processor")
             self.is_listening = False
+            return
+        
+        # Start a thread to detect silence and stop recording
+        threading.Thread(target=self._listen_and_process, daemon=True).start()
     
-    def _process_audio_for_visualization(self, audio_data):
-        """Process audio data for visualization"""
+    def _listen_and_process(self):
+        """Thread function that waits for audio processor to finish and then processes the recording"""
         try:
-            # Convert to numpy array
-            data = np.frombuffer(audio_data, dtype=np.int16)
+            # Wait for the audio processor to finish recording
+            while self.audio_processor.is_listening:
+                time.sleep(0.1)
             
-            # Normalize the data to range [-1, 1]
-            normalized = data.astype(float) / 32768.0
-            
-            # Take absolute value to get amplitude
-            amplitude = np.abs(normalized).mean()
-            
-            # Apply amplification factor to make the visualization more prominent
-            # Increase the factor from 1.0 to 5.0 to make the visualization more visible
-            amplification_factor = 5.0
-            amplified_amplitude = min(amplitude * amplification_factor, 1.0)  # Clamp to 1.0 max
-            
-            # Log the original and amplified values occasionally for debugging
-            if np.random.random() < 0.01:  # Log roughly 1% of values to avoid flooding logs
-                logger.debug(f"Audio amplitude: original={amplitude:.6f}, amplified={amplified_amplitude:.6f}")
-            
-            # Emit the signal with the amplified amplitude
-            self.audio_level_updated.emit(amplified_amplitude)
-            
-        except Exception as e:
-            logger.error(f"Error processing audio for visualization: {e}")
-    
-    def _detect_silence(self):
-        """Detect when the user stops speaking and end recording"""
-        try:
-            # Wait for initial audio to accumulate
-            logger.info("Starting silence detection")
-            time.sleep(0.5)
-            
-            # Adjusted silence detection parameters for longer pauses
-            silence_threshold = 0.008  # Reduced threshold to be more sensitive to quiet speech
-            silence_duration = 0
-            max_silence = 2.0  # 2 seconds of silence to stop recording
-            check_interval = 0.1  # Check every 100ms
-            
-            logger.debug(f"Silence detection parameters: threshold={silence_threshold}, max_silence={max_silence}s, check_interval={check_interval}s")
-            
-            while self.is_listening and self.stream and silence_duration < max_silence:
-                if not self.audio_frames or len(self.audio_frames) < 2:
-                    time.sleep(check_interval)
-                    continue
-                
-                # Get the latest audio frame
-                latest_frame = self.audio_frames[-1]
-                audio_data = np.frombuffer(latest_frame, dtype=np.int16)
-                normalized = audio_data.astype(float) / 32768.0
-                current_amplitude = np.abs(normalized).mean()
-                
-                if current_amplitude < silence_threshold:
-                    silence_duration += check_interval
-                    # Log only when silence is detected
-                    if silence_duration >= 1.0 and silence_duration % 1.0 < check_interval:
-                        logger.debug(f"Silence detected for {silence_duration:.1f}s, amplitude: {current_amplitude:.6f}")
-                else:
-                    if silence_duration > 0:
-                        logger.debug(f"Speech resumed after {silence_duration:.1f}s of silence, amplitude: {current_amplitude:.6f}")
-                    silence_duration = 0
-                
-                time.sleep(check_interval)
-            
-            # If we exited because of silence detection
-            if self.is_listening and self.stream:
-                logger.info(f"Silence threshold reached after {silence_duration:.1f}s, stopping recording")
+            # Process the recording if we're still in listening mode
+            if self.is_listening:
                 self.process_recording()
-                self.stop_listening()
-            
+                self.is_listening = False
         except Exception as e:
-            logger.error(f"Error in silence detection: {e}")
+            logger.error(f"Error in _listen_and_process: {e}")
+            self.is_listening = False
     
     def process_recording(self):
         """Process the recorded audio and generate a transcription"""
         try:
-            if not self.audio_frames:
-                logger.warning("No audio frames to process")
+            # Get the recorded audio file path
+            temp_audio_path = self.audio_processor.get_recorded_audio_path()
+            
+            if not temp_audio_path:
+                logger.warning("No audio data to process")
                 return
             
-            logger.info(f"Processing {len(self.audio_frames)} audio frames")
-            
-            # Check if we have enough audio data
-            total_audio_time = len(self.audio_frames) * (CHUNK / RATE)
-            logger.info(f"Total recorded audio: {total_audio_time:.2f} seconds")
-            
-            if total_audio_time < 0.5:  # Less than half a second of audio
-                logger.warning(f"Audio recording too short ({total_audio_time:.2f}s), may not contain speech")
-            
-            # Save the recorded audio to a temporary WAV file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                temp_audio_path = temp_audio.name
-                
-                # Create a WAV file from the recorded frames
-                logger.debug(f"Creating WAV file at {temp_audio_path}")
-                wf = wave.open(temp_audio_path, 'wb')
-                wf.setnchannels(CHANNELS)
-                wf.setsampwidth(self.pyaudio.get_sample_size(FORMAT))
-                wf.setframerate(RATE)
-                wf.writeframes(b''.join(self.audio_frames))
-                wf.close()
-                
-                # Get file size for logging
-                file_size = os.path.getsize(temp_audio_path)
-                logger.debug(f"WAV file created, size: {file_size} bytes")
-            
-            logger.info(f"Audio saved to temporary file: {temp_audio_path}")
+            logger.info(f"Processing audio file: {temp_audio_path}")
             
             # Use faster-whisper to transcribe the audio
             if self.whisper_model:
@@ -761,20 +527,11 @@ class AudioProcessor(QObject):
         """Stop listening for audio input."""
         try:
             logger.info("Stopping audio recording")
-            if self.stream:
-                logger.debug(f"Stopping audio stream, stream active: {self.stream.is_active()}")
-                self.stream.stop_stream()
-                self.stream.close()
-                self.stream = None
-                logger.info("Audio stream closed successfully")
-                
-                # Play stop listening notification sound
-                threading.Thread(target=play_audio_file, args=(STOP_LISTENING_SOUND,), daemon=True).start()
-            
+            self.audio_processor.stop_listening()
             self.is_listening = False
             
         except Exception as e:
-            logger.error(f"Error stopping audio stream: {e}")
+            logger.error(f"Error stopping audio recording: {e}")
             self.is_listening = False
 
 
@@ -1365,7 +1122,7 @@ class PyQtSpeechUI(QMainWindow):
         """Initialize audio processor in background thread"""
         try:
             logger.info("Initializing audio processor in background")
-            self.audio_processor = AudioProcessor()
+            self.audio_processor = AudioProcessorUI()
             self.audio_processor.audio_level_updated.connect(self.update_audio_level)
             self.audio_processor.transcription_ready.connect(self.handle_transcription)
             self.audio_ready = True
@@ -1437,7 +1194,7 @@ class PyQtSpeechUI(QMainWindow):
         try:
             # First check environment variable
             from speech_mcp.config import get_env_setting
-            env_voice = get_env_setting("SPEECH_MCP_TTS_VOICE")
+            env_voice = get_env_setting(ENV_TTS_VOICE)
             if env_voice:
                 logger.info(f"Found voice preference in environment variable: {env_voice}")
                 return True
@@ -1467,7 +1224,7 @@ class PyQtSpeechUI(QMainWindow):
             
             # Also set environment variable for current session
             from speech_mcp.config import set_env_setting
-            set_env_setting("SPEECH_MCP_TTS_VOICE", voice)
+            set_env_setting(ENV_TTS_VOICE, voice)
             
             logger.info(f"Voice preference saved: {voice}")
             return result
@@ -1503,7 +1260,7 @@ class PyQtSpeechUI(QMainWindow):
             # Create a UI_READY command file to signal back to the server
             try:
                 with open(COMMAND_FILE, 'w') as f:
-                    f.write("UI_READY")
+                    f.write(CMD_UI_READY)
                 logger.info("Created UI_READY command file after voice selection")
             except Exception as e:
                 logger.error(f"Error creating command file: {e}")
@@ -1704,7 +1461,7 @@ class PyQtSpeechUI(QMainWindow):
                     command = f.read().strip()
                 
                 # Process the command
-                if command == "LISTEN":
+                if command == CMD_LISTEN:
                     logger.info("Received LISTEN command")
                     # If components are not ready, store the command to process later
                     if not hasattr(self, 'audio_processor') or not self.audio_processor:
@@ -1722,10 +1479,10 @@ class PyQtSpeechUI(QMainWindow):
                         # Wait a moment before speaking to ensure UI is fully ready
                         QTimer.singleShot(500, self.play_guidance_message)
                         
-                elif command == "IDLE" and hasattr(self, 'audio_processor') and self.audio_processor and self.audio_processor.is_listening:
+                elif command == CMD_IDLE and hasattr(self, 'audio_processor') and self.audio_processor and self.audio_processor.is_listening:
                     logger.info("Received IDLE command")
                     self.stop_listening()
-                elif command == "SPEAK":
+                elif command == CMD_SPEAK:
                     logger.info("Received SPEAK command")
                     # We'll handle speaking in check_for_responses
                     if hasattr(self, 'tts_adapter') and self.tts_adapter:
@@ -1785,7 +1542,7 @@ class PyQtSpeechUI(QMainWindow):
         # Write a UI_CLOSED command to the command file
         try:
             with open(COMMAND_FILE, 'w') as f:
-                f.write("UI_CLOSED")
+                f.write(CMD_UI_CLOSED)
             logger.info("Created UI_CLOSED command file")
         except Exception as e:
             logger.error(f"Error creating command file: {e}")

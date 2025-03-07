@@ -9,13 +9,15 @@ import logging
 import sys
 import os
 
+# Import centralized constants
+from speech_mcp.constants import UI_LOG_FILE
+
 # Set up logging
-log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "speech-mcp-ui.log")
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(levelname)s: %(message)s',
     handlers=[
-        logging.FileHandler(log_file),
+        logging.FileHandler(UI_LOG_FILE),
         logging.StreamHandler(sys.stdout)
     ]
 )
