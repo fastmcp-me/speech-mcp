@@ -38,8 +38,7 @@ class TTSAdapter(QObject):
     """
     Text-to-speech adapter for PyQt UI.
     
-    This class provides an interface to use Kokoro for TTS, with a fallback
-    to pyttsx3 if Kokoro is not available.
+    This class provides a Qt wrapper around the TTS adapters to integrate with PyQt signals.
     """
     speaking_finished = pyqtSignal()
     speaking_started = pyqtSignal()
@@ -55,69 +54,56 @@ class TTSAdapter(QObject):
         self.initialize_tts()
     
     def initialize_tts(self):
-        """Initialize the TTS engine"""
+        """Initialize the TTS engine using the adapter system"""
         try:
             # First try to import the Kokoro adapter
-            logger.info("Initializing Kokoro as primary TTS engine")
+            logger.info("Initializing TTS using adapter system")
             
-            # Check if Kokoro adapter is available
-            if importlib.util.find_spec("speech_mcp.tts_adapters.kokoro_adapter") is not None:
-                try:
-                    # Import Kokoro adapter
-                    from speech_mcp.tts_adapters.kokoro_adapter import KokoroTTS
-                    
-                    # Import config module if available
-                    try:
-                        from speech_mcp.config import get_setting, get_env_setting
-                        
-                        # Get saved voice preference
-                        voice = None
-                        
-                        # First check environment variable
-                        env_voice = get_env_setting(ENV_TTS_VOICE)
-                        if env_voice:
-                            voice = env_voice
-                            logger.info(f"Using voice from environment variable: {voice}")
-                        else:
-                            # Then check config file
-                            config_voice = get_setting("tts", "voice", None)
-                            if config_voice:
-                                voice = config_voice
-                                logger.info(f"Using voice from config: {voice}")
-                    except ImportError:
-                        voice = None
-                        logger.info("Config module not available, using default voice")
-                    
-                    # Initialize with default or saved voice settings
-                    if voice:
-                        self.tts_engine = KokoroTTS(voice=voice, lang_code="a", speed=1.0)
-                    else:
-                        self.tts_engine = KokoroTTS(voice="af_heart", lang_code="a", speed=1.0)
-                    
+            # Try to import the TTS adapters
+            from speech_mcp.tts_adapters import KokoroTTS, Pyttsx3TTS
+            
+            # First try Kokoro (our primary TTS engine)
+            try:
+                logger.info("Trying to initialize Kokoro TTS adapter")
+                self.tts_engine = KokoroTTS()
+                if self.tts_engine.is_initialized:
                     logger.info("Kokoro TTS adapter initialized successfully")
-                    
-                    # List of available Kokoro voice models
-                    voices = self.tts_engine.get_available_voices()
-                    self.available_voices = voices
-                    self.current_voice = self.tts_engine.voice  # Use the actual voice that was set
-                    logger.debug(f"Available Kokoro TTS voices: {len(voices)}")
-                    for i, voice in enumerate(voices):
-                        logger.debug(f"Voice {i}: {voice}")
-                    
-                    return True
+                else:
+                    logger.warning("Kokoro TTS adapter initialization failed")
+                    raise ImportError("Kokoro initialization failed")
+            except ImportError as e:
+                logger.warning(f"Failed to initialize Kokoro TTS adapter: {e}")
+                # Fall back to pyttsx3
+                try:
+                    logger.info("Falling back to pyttsx3 TTS adapter")
+                    self.tts_engine = Pyttsx3TTS()
+                    if self.tts_engine.is_initialized:
+                        logger.info("pyttsx3 TTS adapter initialized successfully")
+                    else:
+                        logger.warning("pyttsx3 TTS adapter initialization failed")
+                        raise ImportError("pyttsx3 initialization failed")
                 except ImportError as e:
-                    logger.warning(f"Failed to import Kokoro adapter: {e}")
-                    # Fall back to pyttsx3
-                except Exception as e:
-                    logger.error(f"Error initializing Kokoro: {e}")
-                    # Fall back to pyttsx3
+                    logger.error(f"Failed to initialize pyttsx3 TTS adapter: {e}")
+                    self.tts_engine = None
             
-            # Fall back to pyttsx3
-            logger.info("Falling back to pyttsx3 for TTS")
+            # If we have a TTS engine, get the available voices
+            if self.tts_engine:
+                self.available_voices = self.tts_engine.get_available_voices()
+                self.current_voice = self.tts_engine.voice
+                logger.info(f"TTS initialized with {len(self.available_voices)} voices, current voice: {self.current_voice}")
+                return True
+            else:
+                logger.error("No TTS engine available")
+                return False
+                
+        except ImportError as e:
+            logger.warning(f"Failed to import TTS adapters: {e}")
+            
+            # Direct fallback to pyttsx3 if adapters are not available
             try:
                 import pyttsx3
                 self.tts_engine = pyttsx3.init()
-                logger.info("pyttsx3 text-to-speech engine initialized")
+                logger.info("pyttsx3 text-to-speech engine initialized directly")
                 
                 # Get available voices
                 voices = self.tts_engine.getProperty('voices')
@@ -130,7 +116,7 @@ class TTSAdapter(QObject):
                 
                 return True
             except ImportError as e:
-                logger.warning(f"pyttsx3 not available: {e}")
+                logger.error(f"pyttsx3 not available: {e}")
             except Exception as e:
                 logger.error(f"Error initializing pyttsx3: {e}")
             
@@ -161,6 +147,9 @@ class TTSAdapter(QObject):
         
         self.is_speaking = True
         self.speaking_started.emit()
+        
+        # Generate a speech pattern for visualization
+        self.generate_speech_pattern(text)
         
         # Start speaking in a separate thread
         threading.Thread(target=self._speak_thread, args=(text,), daemon=True).start()
@@ -227,37 +216,33 @@ class TTSAdapter(QObject):
             logger.info(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
             print(f"_speak_thread started for text: {text[:50]}{'...' if len(text) > 50 else ''}")
             
-            # Generate a speech pattern based on the text
-            # This will create more realistic visualization that matches the speech
-            self.generate_speech_pattern(text)
-            
-            # Signal to the main thread to start visualization
-            self.speaking_started.emit()
-            
-            # Use the appropriate TTS engine
+            # Use the TTS engine's speak method
             if hasattr(self.tts_engine, 'speak'):
-                # This is the Kokoro adapter
-                logger.info("Using Kokoro adapter speak method")
-                print("Using Kokoro adapter speak method")
+                # This is one of our adapters
+                logger.info("Using TTS adapter speak method")
+                print("Using TTS adapter speak method")
                 try:
                     result = self.tts_engine.speak(text)
-                    logger.info(f"Kokoro speak result: {result}")
-                    print(f"Kokoro speak result: {result}")
+                    logger.info(f"TTS speak result: {result}")
+                    print(f"TTS speak result: {result}")
                     if not result:
-                        logger.error("Kokoro TTS failed")
-                        print("Kokoro TTS failed")
+                        logger.error("TTS failed")
+                        print("TTS failed")
                 except Exception as e:
-                    logger.error(f"Exception in Kokoro speak: {e}", exc_info=True)
-                    print(f"Exception in Kokoro speak: {e}")
+                    logger.error(f"Exception in TTS speak: {e}", exc_info=True)
+                    print(f"Exception in TTS speak: {e}")
                     result = False
-            else:
-                # This is pyttsx3
-                logger.info("Using pyttsx3 say method")
-                print("Using pyttsx3 say method")
+            elif hasattr(self.tts_engine, 'say'):
+                # This is direct pyttsx3
+                logger.info("Using direct pyttsx3 say method")
+                print("Using direct pyttsx3 say method")
                 self.tts_engine.say(text)
                 self.tts_engine.runAndWait()
                 logger.info("pyttsx3 speech completed")
                 print("pyttsx3 speech completed")
+            else:
+                logger.error("TTS engine does not have speak or say method")
+                print("TTS engine does not have speak or say method")
             
             logger.info("Speech completed")
             print("Speech completed")
@@ -332,8 +317,8 @@ class TTSAdapter(QObject):
             return False
         
         try:
-            if self.tts_engine and hasattr(self.tts_engine, 'set_voice'):
-                # This is the Kokoro adapter
+            if hasattr(self.tts_engine, 'set_voice'):
+                # This is one of our adapters
                 result = self.tts_engine.set_voice(voice_id)
                 if result:
                     self.current_voice = voice_id
@@ -343,7 +328,7 @@ class TTSAdapter(QObject):
                     logger.error(f"Failed to set voice to: {voice_id}")
                     return False
             elif hasattr(self.tts_engine, 'setProperty'):
-                # This is pyttsx3
+                # This is direct pyttsx3
                 # Extract the voice ID from the format "pyttsx3:voice_id"
                 if voice_id.startswith("pyttsx3:"):
                     voice_id = voice_id.split(":", 1)[1]

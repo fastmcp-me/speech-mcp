@@ -23,30 +23,22 @@ import threading
 import importlib.util
 from typing import Optional, Dict, Any, List
 
+# Import base adapter class
+from speech_mcp.tts_adapters import BaseTTSAdapter
+
+# Import pyttsx3 adapter for fallback
+try:
+    from speech_mcp.tts_adapters.pyttsx3_adapter import Pyttsx3TTS
+except ImportError:
+    Pyttsx3TTS = None
+
 # Import centralized constants
 from speech_mcp.constants import ENV_TTS_VOICE
-
-# Import configuration module
-try:
-    from speech_mcp.config import get_setting, set_setting, get_env_setting, set_env_setting
-except ImportError:
-    # Fallback if config module is not available
-    def get_setting(section, key, default=None):
-        return default
-    
-    def set_setting(section, key, value):
-        return False
-    
-    def get_env_setting(name, default=None):
-        return os.environ.get(name, default)
-    
-    def set_env_setting(name, value):
-        os.environ[name] = value
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-class KokoroTTS:
+class KokoroTTS(BaseTTSAdapter):
     """
     Text-to-speech adapter for Kokoro
     
@@ -63,27 +55,31 @@ class KokoroTTS:
             lang_code: The language code to use (default: "a" for American English)
             speed: The speaking speed (default: 1.0)
         """
-        # Get voice preference from config or environment variable
-        if voice is None:
-            # First try environment variable
-            env_voice = get_env_setting(ENV_TTS_VOICE)
-            if env_voice:
-                voice = env_voice
-                logger.info(f"Using voice from environment variable: {voice}")
-            else:
-                # Then try config file
-                config_voice = get_setting("tts", "voice", "af_heart")
-                voice = config_voice
-                logger.info(f"Using voice from config: {voice}")
+        # Call parent constructor to initialize common attributes
+        super().__init__(voice, lang_code, speed)
         
-        self.voice = voice
-        self.lang_code = lang_code
-        self.speed = speed
+        # Set default voice if none provided
+        if self.voice is None:
+            self.voice = "af_heart"
+        
         self.kokoro_available = False
         self.pipeline = None
-        self.pyttsx3_engine = None
+        self.fallback_tts = None
         
-        # Try to import Kokoro
+        # Initialize Kokoro
+        self._initialize_kokoro()
+        
+        # If Kokoro initialization failed, set up fallback
+        if not self.kokoro_available:
+            self._setup_fallback()
+    
+    def _initialize_kokoro(self) -> bool:
+        """
+        Initialize Kokoro TTS engine
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
             # Check if Kokoro is installed
             if importlib.util.find_spec("kokoro") is not None:
@@ -92,44 +88,63 @@ class KokoroTTS:
                     from kokoro import KPipeline
                     self.pipeline = KPipeline(lang_code=self.lang_code)
                     self.kokoro_available = True
-                    logger.info(f"Kokoro TTS initialized successfully with voice={voice}, lang_code={lang_code}, speed={speed}")
-                    print(f"Kokoro TTS initialized successfully with voice={voice}!")
+                    self.is_initialized = True
+                    logger.info(f"Kokoro TTS initialized successfully with voice={self.voice}, lang_code={self.lang_code}, speed={self.speed}")
+                    print(f"Kokoro TTS initialized successfully with voice={self.voice}!")
+                    return True
                 except ImportError as e:
                     logger.warning(f"Failed to import Kokoro module: {e}")
                     print(f"Failed to import Kokoro module: {e}")
-                    self._setup_pyttsx3_fallback()
                 except Exception as e:
                     logger.error(f"Error initializing Kokoro: {e}")
                     print(f"Error initializing Kokoro: {e}")
-                    self._setup_pyttsx3_fallback()
             else:
-                logger.warning("Kokoro not found, falling back to pyttsx3")
-                print("Kokoro not found, falling back to pyttsx3")
-                self._setup_pyttsx3_fallback()
+                logger.warning("Kokoro not found, will use fallback")
+                print("Kokoro not found, will use fallback")
         except ImportError:
-            logger.warning("Failed to import Kokoro, falling back to pyttsx3")
-            print("Failed to import Kokoro, falling back to pyttsx3")
-            self._setup_pyttsx3_fallback()
+            logger.warning("Failed to import Kokoro, will use fallback")
+            print("Failed to import Kokoro, will use fallback")
         except Exception as e:
             logger.error(f"Error initializing Kokoro TTS: {e}")
             print(f"Error initializing Kokoro TTS: {e}")
-            self._setup_pyttsx3_fallback()
+        
+        return False
     
-    def _setup_pyttsx3_fallback(self):
-        """Set up pyttsx3 as a fallback TTS engine"""
+    def _setup_fallback(self) -> bool:
+        """
+        Set up fallback TTS engine (pyttsx3)
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
+            # Try to use the Pyttsx3TTS adapter
+            if Pyttsx3TTS is not None:
+                self.fallback_tts = Pyttsx3TTS(voice=None, lang_code=self.lang_code, speed=self.speed)
+                if self.fallback_tts.is_initialized:
+                    logger.info("pyttsx3 fallback initialized successfully")
+                    print("pyttsx3 fallback initialized successfully!")
+                    self.is_initialized = True
+                    return True
+            
+            # If Pyttsx3TTS adapter is not available, try direct import
             import pyttsx3
-            self.pyttsx3_engine = pyttsx3.init()
-            logger.info("pyttsx3 fallback initialized successfully")
-            print("pyttsx3 fallback initialized successfully!")
+            from speech_mcp.tts_adapters.pyttsx3_adapter import Pyttsx3TTS
+            self.fallback_tts = Pyttsx3TTS(voice=None, lang_code=self.lang_code, speed=self.speed)
+            if self.fallback_tts.is_initialized:
+                logger.info("pyttsx3 fallback initialized successfully")
+                print("pyttsx3 fallback initialized successfully!")
+                self.is_initialized = True
+                return True
         except ImportError:
             logger.error("pyttsx3 not available for fallback")
             print("pyttsx3 not available for fallback")
-            self.pyttsx3_engine = None
         except Exception as e:
             logger.error(f"Error initializing pyttsx3 fallback: {e}")
             print(f"Error initializing pyttsx3 fallback: {e}")
-            self.pyttsx3_engine = None
+        
+        self.fallback_tts = None
+        return False
     
     def speak(self, text: str) -> bool:
         """
@@ -198,26 +213,23 @@ class KokoroTTS:
                 print("Falling back to pyttsx3...")
                 # Fall back to pyttsx3
         else:
-            logger.info("Kokoro not available, using pyttsx3 fallback")
-            print("Kokoro not available, using pyttsx3 fallback")
+            logger.info("Kokoro not available, using fallback")
+            print("Kokoro not available, using fallback")
         
         # Fall back to pyttsx3 if Kokoro failed or is not available
-        if self.pyttsx3_engine is not None:
+        if self.fallback_tts is not None:
             try:
                 logger.info("Using pyttsx3 fallback for TTS")
                 print("Using pyttsx3 fallback for TTS")
-                self.pyttsx3_engine.say(text)
-                self.pyttsx3_engine.runAndWait()
-                logger.info("pyttsx3 TTS completed successfully")
-                return True
+                return self.fallback_tts.speak(text)
             except Exception as e:
                 logger.error(f"Error using pyttsx3 fallback: {e}")
                 print(f"Error using pyttsx3 fallback: {e}")
         else:
-            logger.warning("pyttsx3 fallback not available")
-            print("pyttsx3 fallback not available")
+            logger.warning("No fallback TTS available")
+            print("No fallback TTS available")
         
-        # If we got here, both Kokoro and pyttsx3 failed
+        # If we got here, both Kokoro and fallback failed
         logger.error("All TTS methods failed")
         print("All TTS methods failed")
         return False
@@ -283,20 +295,19 @@ class KokoroTTS:
                 logger.error(f"Error getting Kokoro voices: {e}")
                 print(f"Error getting Kokoro voices: {e}")
         else:
-            logger.info("Kokoro not available, listing only fallback voices")
-            print("Kokoro not available, listing only fallback voices")
+            logger.info("Kokoro not available")
+            print("Kokoro not available")
         
-        # Get pyttsx3 voices if available
-        if self.pyttsx3_engine is not None:
+        # Get fallback voices if available
+        if self.fallback_tts is not None:
             try:
-                pyttsx3_voices = self.pyttsx3_engine.getProperty('voices')
-                for voice in pyttsx3_voices:
-                    voices.append(f"pyttsx3:{voice.id}")
-                logger.info(f"Found {len(pyttsx3_voices)} pyttsx3 voices")
-                print(f"Found {len(pyttsx3_voices)} pyttsx3 voices")
+                fallback_voices = self.fallback_tts.get_available_voices()
+                voices.extend(fallback_voices)
+                logger.info(f"Found {len(fallback_voices)} fallback voices")
+                print(f"Found {len(fallback_voices)} fallback voices")
             except Exception as e:
-                logger.error(f"Error getting pyttsx3 voices: {e}")
-                print(f"Error getting pyttsx3 voices: {e}")
+                logger.error(f"Error getting fallback voices: {e}")
+                print(f"Error getting fallback voices: {e}")
         
         return voices
     
@@ -311,42 +322,23 @@ class KokoroTTS:
             bool: True if successful, False otherwise
         """
         try:
-            # Check if the voice is a pyttsx3 voice
-            if voice.startswith("pyttsx3:") and self.pyttsx3_engine is not None:
-                voice_id = voice.split(":", 1)[1]
-                logger.info(f"Setting pyttsx3 voice to: {voice_id}")
-                print(f"Setting pyttsx3 voice to: {voice_id}")
-                
-                # Find the voice object
-                for v in self.pyttsx3_engine.getProperty('voices'):
-                    if v.id == voice_id:
-                        self.pyttsx3_engine.setProperty('voice', v.id)
-                        logger.info(f"pyttsx3 voice set to: {v.name}")
-                        print(f"pyttsx3 voice set to: {v.name}")
-                        break
-                
-                # Also update the internal voice name
-                self.voice = voice
+            # Check if the voice is for the fallback TTS
+            if voice.startswith("pyttsx3:") and self.fallback_tts is not None:
+                result = self.fallback_tts.set_voice(voice)
+                if result:
+                    # Update our own voice property and save preference
+                    super().set_voice(voice)
+                return result
             else:
                 # Assume it's a Kokoro voice
                 old_voice = self.voice
-                self.voice = voice
+                
+                # Update voice property and save preference
+                super().set_voice(voice)
+                
                 logger.info(f"Kokoro voice changed from {old_voice} to {voice}")
                 print(f"Kokoro voice changed from {old_voice} to {voice}")
-            
-            # Save the voice preference to config and environment variable
-            try:
-                # Save to config file
-                set_setting("tts", "voice", voice)
-                
-                # Save to environment variable
-                set_env_setting(ENV_TTS_VOICE, voice)
-                
-                logger.info(f"Voice preference saved: {voice}")
-            except Exception as e:
-                logger.error(f"Error saving voice preference: {e}")
-            
-            return True
+                return True
         except Exception as e:
             logger.error(f"Error setting voice: {e}")
             print(f"Error setting voice: {e}")
@@ -363,23 +355,16 @@ class KokoroTTS:
             bool: True if successful, False otherwise
         """
         try:
-            old_speed = self.speed
-            self.speed = speed
-            logger.info(f"Speed changed from {old_speed} to {speed}")
-            print(f"TTS speed changed from {old_speed} to {speed}")
+            # Update speed property
+            super().set_speed(speed)
             
-            # Also set speed for pyttsx3 if available
-            if self.pyttsx3_engine is not None:
+            # Also set speed for fallback TTS if available
+            if self.fallback_tts is not None:
                 try:
-                    # pyttsx3 uses words per minute, default is around 200
-                    # Convert our speed factor to words per minute
-                    rate = int(200 * speed)
-                    self.pyttsx3_engine.setProperty('rate', rate)
-                    logger.info(f"pyttsx3 rate set to: {rate} words per minute")
-                    print(f"pyttsx3 rate set to: {rate} words per minute")
+                    self.fallback_tts.set_speed(speed)
                 except Exception as e:
-                    logger.error(f"Error setting pyttsx3 rate: {e}")
-                    print(f"Error setting pyttsx3 rate: {e}")
+                    logger.error(f"Error setting fallback TTS speed: {e}")
+                    print(f"Error setting fallback TTS speed: {e}")
             
             return True
         except Exception as e:
