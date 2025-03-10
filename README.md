@@ -9,7 +9,7 @@ https://github.com/user-attachments/assets/f10f29d9-8444-43fb-a919-c80b9e0a12c8
 
 ## Overview
 
-Speech MCP provides a voice interface for Goose, allowing users to interact through speech rather than text. It includes:
+Speech MCP provides a voice interface for [Goose](https://github.com/block/goose), allowing users to interact through speech rather than text. It includes:
 
 - Real-time audio processing for speech recognition
 - Local speech-to-text using faster-whisper (a faster implementation of OpenAI's Whisper model)
@@ -28,16 +28,42 @@ Speech MCP provides a voice interface for Goose, allowing users to interact thro
 - **Robust Error Handling**: Graceful recovery from common failure modes
 
 ## Installation
+> **Important Note**: After installation, the first time you use the speech interface, it may take several minutes to download the Kokoro voice models (approximately 523 KB per voice). During this initial setup period, the system will use a more robotic-sounding fallback voice. Once the Kokoro voices are downloaded, the high-quality voices will be used automatically.
 
-### Prerequisites
+## ⚠️ IMPORTANT PREREQUISITES ⚠️
 
-Make sure you have PortAudio installed on your system before proceeding (see [Dependencies](#prerequisites) section).
+Before installing Speech MCP, you **MUST** install PortAudio on your system. PortAudio is required for PyAudio to capture audio from your microphone.
+
+### PortAudio Installation Instructions
+
+**macOS:**
+```bash
+brew install portaudio
+export LDFLAGS="-L/usr/local/lib"
+export CPPFLAGS="-I/usr/local/include"
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt-get update
+sudo apt-get install portaudio19-dev python3-dev
+```
+
+**Linux (Fedora/RHEL/CentOS):**
+```bash
+sudo dnf install portaudio-devel
+```
+
+**Windows:**
+For Windows, PortAudio is included in the PyAudio wheel file, so no separate installation is required when installing PyAudio with pip.
+
+> **Note**: If you skip this step, PyAudio installation will fail with "portaudio.h file not found" errors and the extension will not work.
 
 ### Option 1: Quick Install (One-Click)
 
 Click the link below if you have Goose installed:
 
-`goose://extension?cmd=uvx&arg=speech-mcp@latest&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose`
+[goose://extension?cmd=uvx&arg=speech-mcp@latest&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose](goose://extension?cmd=uvx&arg=speech-mcp@latest&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose)
 
 ### Option 2: Using Goose CLI (recommended)
 
@@ -84,30 +110,6 @@ goose session --with-extension "python -m speech_mcp"
 - Pydub (for audio processing)
 - psutil (for process management)
 
-### Prerequisites
-
-#### PortAudio
-
-PortAudio is a prerequisite for PyAudio, which handles audio capture. You need to install it before installing PyAudio.
-
-**macOS:**
-```bash
-brew install portaudio
-```
-
-**Linux (Debian/Ubuntu):**
-```bash
-sudo apt-get update
-sudo apt-get install portaudio19-dev python3-dev
-```
-
-**Linux (Fedora/RHEL/CentOS):**
-```bash
-sudo dnf install portaudio-devel
-```
-
-**Windows:**
-For Windows, PortAudio is included in the PyAudio wheel file, so no separate installation is required when installing PyAudio with pip.
 
 ### Optional Dependencies
 
@@ -124,33 +126,22 @@ For Windows, PortAudio is included in the PyAudio wheel file, so no separate ins
 
 ## Usage
 
-To use this MCP with Goose, you can:
+To use this MCP with Goose, simply ask Goose to talk to you or start a voice conversation:
 
-1. Start a conversation:
-   ```python
-   user_input = start_conversation()
+1. Start a conversation by saying something like:
+   ```
+   "Let's talk using voice"
+   "Can we have a voice conversation?"
+   "I'd like to speak instead of typing"
    ```
 
-2. Reply to the user and get their response:
-   ```python
-   user_response = reply("Your response text here")
-   ```
+2. Goose will automatically launch the speech interface and start listening for your voice input.
 
-## Typical Workflow
+3. When Goose responds, it will speak the response aloud and then automatically listen for your next input.
 
-```python
-# Start the conversation
-user_input = start_conversation()
+4. The conversation continues naturally with alternating speaking and listening, just like talking to a person.
 
-# Process the input and generate a response
-# ...
-
-# Reply to the user and get their response
-follow_up = reply("Here's my response to your question.")
-
-# Process the follow-up and reply again
-reply("I understand your follow-up question. Here's my answer.")
-```
+No need to call specific functions or use special commands - just ask Goose to talk and start speaking naturally.
 
 ## UI Features
 
@@ -219,15 +210,9 @@ This typically means PortAudio is not installed or not found in your system:
 - Verify your system recognizes the microphone in your sound settings
 - Try selecting a specific device index in the code if you have multiple audio devices
 
-## Recent Improvements
+## Changelog
 
-- **Complete PyQt UI Migration**: Replaced the old Tkinter UI with a modern PyQt implementation
-- **Code Refactoring**: Split UI code into multiple components for better maintainability
-- **Process Management**: Improved process lifecycle management with automatic recovery
-- **Voice Persistence**: Added configuration system for saving user preferences
-- **Enhanced Visualization**: Added dynamic audio visualization with animations
-- **Expanded Voice Options**: Updated to support 54 different voice models
-- **Improved Error Handling**: Better recovery from common failure modes
+For a detailed list of recent improvements and version history, please see the [Changelog](docs/CHANGELOG.md).
 
 ## Technical Details
 
@@ -260,28 +245,7 @@ The MCP supports multiple text-to-speech engines:
 
 ##### Available Kokoro Voices
 
-**American Female Voices**
-- af_alloy, af_aoede, af_bella, af_heart, af_jessica, af_kore, af_nicole, af_nova, af_river, af_sarah, af_sky
-
-**American Male Voices**
-- am_adam, am_echo, am_eric, am_fenrir, am_liam, am_michael, am_onyx, am_puck, am_santa
-
-**British Female Voices**
-- bf_alice, bf_emma, bf_isabella, bf_lily
-
-**British Male Voices**
-- bm_daniel, bm_fable, bm_george, bm_lewis
-
-**Other English Voices**
-- ef_dora, em_alex, em_santa
-
-**Other Languages**
-- French: ff_siwis
-- Hindi: hf_alpha, hf_beta, hm_omega, hm_psi
-- Italian: if_sara, im_nicola
-- Japanese: jf_alpha, jf_gongitsune, jf_nezumi, jf_tebukuro, jm_kumo
-- Portuguese: pf_dora, pm_alex, pm_santa
-- Chinese: zf_xiaobei, zf_xiaoni, zf_xiaoxiao, zf_xiaoyi, zm_yunjian, zm_yunxi, zm_yunxia, zm_yunyang
+Speech MCP supports 54+ high-quality voice models through Kokoro TTS. For a complete list of available voices and language options, please visit the [Kokoro GitHub repository](https://github.com/hexgrad/kokoro).
 
 ## License
 
