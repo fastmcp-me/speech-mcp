@@ -25,11 +25,15 @@ Speech MCP provides a voice interface for Goose, allowing users to interact thro
 
 ## Installation
 
+### Prerequisites
+
+Make sure you have PortAudio installed on your system before proceeding (see [Dependencies](#prerequisites) section).
+
 ### Option 1: Quick Install (One-Click)
 
 Click the link below if you have Goose installed:
 
-`goose://extension?cmd=uvx&arg=speech-mcp&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose`
+`goose://extension?cmd=uvx&arg=speech-mcp@latest&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose`
 
 ### Option 2: Using Goose CLI (recommended)
 
@@ -54,10 +58,16 @@ goose session --with-extension "python -m speech_mcp"
 
 ### Option 4: Manual Installation
 
-1. Clone this repository
-2. Install dependencies:
+1. Install PortAudio (see [Prerequisites](#prerequisites) section)
+2. Clone this repository
+3. Install dependencies:
    ```
    uv pip install -e .
+   ```
+   
+   Or for a complete installation including Kokoro TTS:
+   ```
+   uv pip install -e .[all]
    ```
 
 ## Dependencies
@@ -69,6 +79,31 @@ goose session --with-extension "python -m speech_mcp"
 - NumPy (for audio processing)
 - Pydub (for audio processing)
 - psutil (for process management)
+
+### Prerequisites
+
+#### PortAudio
+
+PortAudio is a prerequisite for PyAudio, which handles audio capture. You need to install it before installing PyAudio.
+
+**macOS:**
+```bash
+brew install portaudio
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt-get update
+sudo apt-get install portaudio19-dev python3-dev
+```
+
+**Linux (Fedora/RHEL/CentOS):**
+```bash
+sudo dnf install portaudio-devel
+```
+
+**Windows:**
+For Windows, PortAudio is included in the PyAudio wheel file, so no separate installation is required when installing PyAudio with pip.
 
 ### Optional Dependencies
 
@@ -147,6 +182,38 @@ If you encounter issues with the extension freezing or not responding:
 3. **Use the direct command**: Instead of `uv run speech-mcp`, use the installed package with `speech-mcp` directly.
 4. **Check audio devices**: Ensure your microphone is properly configured and accessible to Python.
 5. **Verify dependencies**: Make sure all required dependencies are installed correctly.
+
+### Common PortAudio Issues
+
+#### "PyAudio installation failed" or "portaudio.h file not found"
+
+This typically means PortAudio is not installed or not found in your system:
+
+- **macOS**: 
+  ```bash
+  brew install portaudio
+  export LDFLAGS="-L/usr/local/lib"
+  export CPPFLAGS="-I/usr/local/include"
+  pip install pyaudio
+  ```
+
+- **Linux**:
+  Make sure you have the development packages:
+  ```bash
+  # For Debian/Ubuntu
+  sudo apt-get install portaudio19-dev python3-dev
+  pip install pyaudio
+  
+  # For Fedora
+  sudo dnf install portaudio-devel
+  pip install pyaudio
+  ```
+
+#### "Audio device not found" or "No Default Input Device Available"
+
+- Check if your microphone is properly connected
+- Verify your system recognizes the microphone in your sound settings
+- Try selecting a specific device index in the code if you have multiple audio devices
 
 ## Recent Improvements
 

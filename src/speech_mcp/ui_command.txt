@@ -1,1 +1,1 @@
-IDLE
+UI_CLOSED
