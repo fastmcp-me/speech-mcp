@@ -18,7 +18,7 @@ WHEEL_PATH="$(pwd)/$WHEEL_FILE"
 ENCODED_PATH=$(python -c "import urllib.parse; print(urllib.parse.quote('$WHEEL_PATH'))")
 
 # Generate the deeplink
-DEEPLINK="goose://extension?cmd=uvx&arg=$ENCODED_PATH&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose"
+DEEPLINK="goose://extension?cmd=uvx&arg=-p&arg=3.10.14&arg=$ENCODED_PATH&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose"
 
 echo "Generated deeplink:"
 echo "$DEEPLINK"
