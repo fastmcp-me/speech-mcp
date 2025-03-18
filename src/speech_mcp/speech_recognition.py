@@ -13,6 +13,7 @@ across server.py and speech_ui.py.
 
 import os
 import time
+from datetime import timedelta, datetime
 from typing import Optional, Tuple, Dict, Any, List, Union
 
 # Import the centralized logger
@@ -151,10 +152,12 @@ class SpeechRecognizer:
                 logger.info(f"Transcribing audio with faster-whisper: {audio_file_path}")
                 
                 transcription_start = time.time()
+                
+                # Only enable word timestamps if specifically requested
                 segments, info = self.whisper_model.transcribe(
                     audio_file_path, 
                     beam_size=5,
-                    word_timestamps=include_timestamps or detect_speakers  # Need timestamps for speaker detection
+                    word_timestamps=include_timestamps or detect_speakers
                 )
                 
                 # Convert segments to list to avoid generator exhaustion
@@ -328,66 +331,89 @@ class SpeechRecognizer:
         Returns:
             List of segments with speaker labels
         """
-        MIN_PAUSE = 1.0  # Minimum pause that might indicate speaker change
-        DIALOGUE_PATTERNS = [
-            "said", "asked", "replied", "answered", "continued",
-            ":", "?", "!"  # Punctuation that might indicate dialogue
-        ]
-        
-        speaker_segments = []
-        current_speaker = "SPEAKER_00"
-        speaker_count = 1
-        
-        for i, segment in enumerate(segments):
-            is_speaker_change = False
+        try:
+            MIN_PAUSE = 1.0  # Minimum pause that might indicate speaker change
+            DIALOGUE_PATTERNS = [
+                "said", "asked", "replied", "answered", "continued",
+                ":", "?", "!"  # Punctuation that might indicate dialogue
+            ]
             
-            # Check for long pause from previous segment
-            if i > 0:
-                prev_end = segments[i-1].end
-                curr_start = segment.start
-                if curr_start - prev_end > MIN_PAUSE:
-                    is_speaker_change = True
+            speaker_segments = []
+            current_speaker = "SPEAKER_00"
+            speaker_count = 1
             
-            # Check for dialogue indicators in text
-            text = segment.text.lower()
-            for pattern in DIALOGUE_PATTERNS:
-                if pattern in text:
-                    is_speaker_change = True
-                    break
+            for i, segment in enumerate(segments):
+                try:
+                    is_speaker_change = False
+                    
+                    # Check for long pause from previous segment
+                    if i > 0:
+                        prev_end = segments[i-1].end
+                        curr_start = segment.start
+                        if curr_start - prev_end > MIN_PAUSE:
+                            is_speaker_change = True
+                    
+                    # Check for dialogue indicators in text
+                    text = segment.text.lower() if segment.text else ""
+                    for pattern in DIALOGUE_PATTERNS:
+                        if pattern in text:
+                            is_speaker_change = True
+                            break
+                    
+                    # If this seems like a new speaker, increment speaker count
+                    if is_speaker_change:
+                        current_speaker = f"SPEAKER_{speaker_count:02d}"
+                        speaker_count += 1
+                    
+                    # Add segment with speaker info
+                    speaker_segments.append({
+                        "start": getattr(segment, "start", 0),
+                        "end": getattr(segment, "end", 0),
+                        "text": getattr(segment, "text", "").strip(),
+                        "speaker": current_speaker,
+                        "words": [{"word": w.word, "start": w.start, "end": w.end}
+                                for w in (getattr(segment, "words", []) or [])]
+                    })
+                except Exception as e:
+                    logger.warning(f"Error processing segment {i}: {e}")
+                    # Add segment with basic info
+                    speaker_segments.append({
+                        "start": 0,
+                        "end": 0,
+                        "text": getattr(segment, "text", "").strip(),
+                        "speaker": current_speaker,
+                        "words": []
+                    })
             
-            # If this seems like a new speaker, increment speaker count
-            if is_speaker_change:
-                current_speaker = f"SPEAKER_{speaker_count:02d}"
-                speaker_count += 1
+            # Post-process to merge nearby segments from same speaker
+            merged_segments = []
+            for segment in speaker_segments:
+                if not merged_segments:
+                    merged_segments.append(segment)
+                    continue
+                    
+                prev = merged_segments[-1]
+                if (prev["speaker"] == segment["speaker"] and 
+                    segment["start"] - prev["end"] < MIN_PAUSE):
+                    # Merge segments
+                    prev["end"] = segment["end"]
+                    prev["text"] += " " + segment["text"]
+                    prev["words"].extend(segment["words"])
+                else:
+                    merged_segments.append(segment)
             
-            # Add segment with speaker info
-            speaker_segments.append({
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text,
-                "speaker": current_speaker,
-                "words": [{"word": w.word, "start": w.start, "end": w.end}
-                         for w in (segment.words or [])]
-            })
-        
-        # Post-process to merge nearby segments from same speaker
-        merged_segments = []
-        for segment in speaker_segments:
-            if not merged_segments:
-                merged_segments.append(segment)
-                continue
-                
-            prev = merged_segments[-1]
-            if (prev["speaker"] == segment["speaker"] and 
-                segment["start"] - prev["end"] < MIN_PAUSE):
-                # Merge segments
-                prev["end"] = segment["end"]
-                prev["text"] += " " + segment["text"]
-                prev["words"].extend(segment["words"])
-            else:
-                merged_segments.append(segment)
-        
-        return merged_segments
+            return merged_segments
+            
+        except Exception as e:
+            logger.error(f"Error in speaker detection: {e}")
+            # Return basic segments without speaker detection
+            return [{
+                "start": getattr(segment, "start", 0),
+                "end": getattr(segment, "end", 0),
+                "text": getattr(segment, "text", "").strip(),
+                "speaker": "SPEAKER_00",
+                "words": []
+            } for segment in segments]
     
     def get_available_models(self) -> List[Dict[str, Any]]:
         """
@@ -481,7 +507,7 @@ class SpeechRecognizer:
 # Create a singleton instance for easy import
 default_recognizer = SpeechRecognizer()
 
-def transcribe_audio(audio_file_path: str, language: str = "en", include_timestamps: bool = False) -> Union[str, Tuple[str, Dict[str, Any]]]:
+def transcribe_audio(audio_file_path: str, language: str = "en", include_timestamps: bool = False, detect_speakers: bool = False) -> Union[str, Tuple[str, Dict[str, Any]]]:
     """
     Transcribe an audio file using the default speech recognizer.
     
@@ -491,21 +517,25 @@ def transcribe_audio(audio_file_path: str, language: str = "en", include_timesta
         audio_file_path: Path to the audio file to transcribe
         language: Language code for transcription (default: "en" for English)
         include_timestamps: Whether to include word-level timestamps (default: False)
+        detect_speakers: Whether to attempt speaker detection (default: False)
         
     Returns:
-        If include_timestamps=False:
+        If include_timestamps=False or detect_speakers=False:
             The transcribed text as a string
-        If include_timestamps=True:
+        If include_timestamps=True or detect_speakers=True:
             Tuple containing:
-                - The formatted text with timestamps
+                - The formatted text with timestamps/speakers
                 - A dictionary with metadata and timing information
     """
     transcription, metadata = default_recognizer.transcribe(
         audio_file_path, 
         language=language,
-        include_timestamps=include_timestamps
+        include_timestamps=include_timestamps,
+        detect_speakers=detect_speakers
     )
-    return (transcription, metadata) if include_timestamps else transcription
+    
+    # Always return both transcription and metadata since server.py expects it
+    return transcription, metadata
 
 def initialize_speech_recognition(
     model_name: str = "base", 

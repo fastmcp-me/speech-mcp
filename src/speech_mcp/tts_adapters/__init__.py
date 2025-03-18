@@ -78,6 +78,20 @@ class BaseTTSAdapter(ABC):
         pass
     
     @abstractmethod
+    def save_to_file(self, text: str, file_path: str) -> bool:
+        """
+        Save speech as an audio file.
+        
+        Args:
+            text: The text to convert to speech
+            file_path: Path where to save the audio file
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
     def get_available_voices(self) -> List[str]:
         """
         Get a list of available voices.

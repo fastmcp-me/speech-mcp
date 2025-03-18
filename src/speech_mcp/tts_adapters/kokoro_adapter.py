@@ -76,15 +76,8 @@ class KokoroTTS(BaseTTSAdapter):
         Returns:
             bool: True if successful, False otherwise
         """
-        # # Check if pip is available
-        # try:
-        #     import pip
-        # except ImportError:
-        #     print("Warning: pip is not available, Kokoro initialization may fail")
-        #     return False
-        #     
-        # Check if stdin/stdout are available (prevent I/O on closed file)
         try:
+            # Check if stdin/stdout are available (prevent I/O on closed file)
             import sys
             if sys.stdin.closed or sys.stdout.closed:
                 print("Warning: stdin or stdout is closed, Kokoro initialization may fail")
@@ -92,6 +85,7 @@ class KokoroTTS(BaseTTSAdapter):
         except Exception:
             print("Warning: Error checking stdin/stdout, Kokoro initialization may fail")
             return False
+            
         try:
             # Check if Kokoro is installed
             if importlib.util.find_spec("kokoro") is not None:
@@ -208,6 +202,56 @@ class KokoroTTS(BaseTTSAdapter):
                 pass
         
         # If we got here, both Kokoro and fallback failed
+        return False
+    
+    def save_to_file(self, text: str, file_path: str) -> bool:
+        """
+        Save speech as an audio file using Kokoro.
+        
+        Args:
+            text: The text to convert to speech
+            file_path: Path where to save the audio file
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not text:
+            return False
+            
+        # Try Kokoro first - this is our primary TTS engine
+        if self.kokoro_available and self.pipeline is not None:
+            try:
+                # Generate audio using Kokoro
+                generator = self.pipeline(
+                    text, voice=self.voice,
+                    speed=self.speed
+                )
+                
+                # Process all segments and concatenate audio
+                import numpy as np
+                audio_segments = []
+                
+                for i, (gs, ps, audio) in enumerate(generator):
+                    audio_segments.append(audio)
+                
+                if audio_segments:
+                    # Concatenate all segments
+                    full_audio = np.concatenate(audio_segments)
+                    
+                    # Save concatenated audio
+                    import soundfile as sf
+                    sf.write(file_path, full_audio, 24000)
+                    
+                    return True
+                    
+            except Exception:
+                # Fall back to pyttsx3
+                pass
+                
+        # Try fallback if Kokoro failed
+        if self.fallback_tts is not None:
+            return self.fallback_tts.save_to_file(text, file_path)
+            
         return False
     
     def get_available_voices(self) -> List[str]:

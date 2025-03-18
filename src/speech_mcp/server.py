@@ -332,24 +332,49 @@ def record_audio():
 def transcribe_audio(audio_file_path):
     """Transcribe audio file using the speech recognition module"""
     try:
+        logger.info(f"Starting transcription for audio file: {audio_file_path}")
+        
         if not initialize_speech_recognition():
+            logger.error("Failed to initialize speech recognition")
             raise Exception("Failed to initialize speech recognition")
         
+        logger.info("Speech recognition initialized successfully")
+        
         # Use the centralized speech recognition module
-        transcription = transcribe_audio_file(audio_file_path)
+        try:
+            logger.info("Calling transcribe_audio_file...")
+            result = transcribe_audio_file(audio_file_path)
+            logger.info(f"transcribe_audio_file returned: {type(result)}")
+            logger.debug(f"transcribe_audio_file full result: {result}")
+            
+            if isinstance(result, tuple):
+                transcription, metadata = result
+                logger.info(f"Unpacked tuple result - transcription type: {type(transcription)}, metadata type: {type(metadata)}")
+            else:
+                transcription = result
+                logger.info(f"Single value result - transcription type: {type(transcription)}")
+        except Exception as e:
+            logger.error(f"Error during transcribe_audio_file call: {str(e)}", exc_info=True)
+            raise
         
         if not transcription:
+            logger.error("Transcription failed or returned empty result")
             raise Exception("Transcription failed or returned empty result")
+        
+        logger.info(f"Transcription successful, length: {len(transcription)}")
         
         # Clean up the temporary file
         try:
             os.unlink(audio_file_path)
-        except Exception:
+            logger.info(f"Cleaned up temporary audio file: {audio_file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up temporary audio file: {str(e)}")
             pass
         
         return transcription
     
     except Exception as e:
+        logger.error(f"Error in transcribe_audio: {str(e)}", exc_info=True)
         raise Exception(f"Error transcribing audio: {str(e)}")
 
 def speak_text(text):
@@ -933,13 +958,26 @@ def transcribe(file_path: str, include_timestamps: bool = False, detect_speakers
                 temp_dir = tempfile.gettempdir()
                 temp_audio = os.path.join(temp_dir, 'temp_audio.wav')
                 
-                # Use ffmpeg to extract audio
-                cmd = ['ffmpeg', '-i', str(file_path), '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', temp_audio]
+                # Use ffmpeg to extract audio with progress and higher priority
+                logger.info(f"Extracting audio from video file: {file_path}")
+                cmd = ['nice', '-n', '-10', 'ffmpeg', '-i', str(file_path), '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', '-y', '-v', 'warning', '-stats', '-threads', str(os.cpu_count()), temp_audio]
+                logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
+                
+                start_time = time.time()
                 result = run(cmd, stdout=PIPE, stderr=PIPE)
+                duration = time.time() - start_time
+                
+                logger.info(f"Audio extraction completed in {duration:.2f}s")
                 
                 if result.returncode != 0:
-                    return f"ERROR: Failed to extract audio from video: {result.stderr.decode()}"
+                    error = result.stderr.decode()
+                    logger.error(f"ffmpeg error: {error}")
+                    return f"ERROR: Failed to extract audio from video: {error}"
                     
+                # Get the size of the extracted audio
+                audio_size = os.path.getsize(temp_audio)
+                logger.info(f"Extracted audio size: {audio_size / 1024 / 1024:.2f}MB")
+                
                 # Update file_path to use the extracted audio
                 file_path = temp_audio
                 
@@ -950,11 +988,26 @@ def transcribe(file_path: str, include_timestamps: bool = False, detect_speakers
             return "ERROR: Failed to initialize speech recognition."
             
         # Use the centralized speech recognition module
-        transcription, metadata = transcribe_audio_file(
-            file_path, 
-            include_timestamps=include_timestamps,
-            detect_speakers=detect_speakers
-        )
+        try:
+            # First try without timestamps/speakers for compatibility
+            transcription, metadata = transcribe_audio_file(file_path)
+            
+            # If that worked and user requested timestamps/speakers, try again with those options
+            if transcription and (include_timestamps or detect_speakers):
+                try:
+                    enhanced_transcription, enhanced_metadata = transcribe_audio_file(
+                        file_path, 
+                        include_timestamps=include_timestamps,
+                        detect_speakers=detect_speakers
+                    )
+                    if enhanced_transcription:
+                        transcription = enhanced_transcription
+                        metadata = enhanced_metadata
+                except Exception:
+                    # If enhanced transcription fails, we'll keep the basic transcription
+                    pass
+        except Exception as e:
+            return f"ERROR: Transcription failed: {str(e)}"
         
         # Clean up temporary audio file if it was created
         if temp_audio and os.path.exists(temp_audio):
@@ -981,18 +1034,21 @@ def transcribe(file_path: str, include_timestamps: bool = False, detect_speakers
             msg += f"Transcript saved to: {transcript_path}\n"
             msg += f"Metadata saved to: {metadata_path}\n\n"
             
-            if detect_speakers:
+            if detect_speakers and metadata.get('speakers'):
                 msg += "The transcript includes speaker detection and timestamps.\n"
                 msg += f"Detected {len(metadata.get('speakers', {}))} speakers\n"
                 msg += f"Speaker changes: {metadata.get('speaker_changes', 0)}\n"
-            elif include_timestamps:
+            elif include_timestamps and metadata.get('timestamps'):
                 msg += "The transcript includes timestamps for each segment.\n"
             
             # Add some metadata to the message
             msg += f"\nDuration: {metadata.get('duration', 'unknown')} seconds\n"
-            msg += f"Language: {metadata.get('language', 'unknown')} "
-            msg += f"(probability: {metadata.get('language_probability', 0):.2f})\n"
-            msg += f"Processing time: {metadata.get('time_taken', 0):.2f} seconds"
+            if metadata.get('language'):
+                msg += f"Language: {metadata.get('language', 'unknown')} "
+                if metadata.get('language_probability'):
+                    msg += f"(probability: {metadata.get('language_probability', 0):.2f})\n"
+            if metadata.get('time_taken'):
+                msg += f"Processing time: {metadata.get('time_taken', 0):.2f} seconds"
             
             return msg
             
@@ -1003,7 +1059,7 @@ def transcribe(file_path: str, include_timestamps: bool = False, detect_speakers
         return f"ERROR: Failed to transcribe file: {str(e)}"
 
 @mcp.tool()
-def narrate(text: str, output_path: str) -> str:
+def narrate(text: Optional[str] = None, text_file_path: Optional[str] = None, output_path: str = None) -> str:
     """
     Convert text to speech and save as an audio file.
     
@@ -1011,28 +1067,71 @@ def narrate(text: str, output_path: str) -> str:
     and save it to the specified output path.
     
     Args:
-        text: The text to convert to speech
+        text: The text to convert to speech (optional if text_file_path is provided)
+        text_file_path: Path to a text file containing the text to narrate (optional if text is provided)
         output_path: Path where to save the audio file (.wav)
         
     Returns:
         A message indicating success or failure of the operation.
     """
+    import os
     global tts_engine
-    
+
     try:
+        # Parameter validation
+        if not output_path:
+            return "ERROR: output_path is required"
+        
+        if text is None and text_file_path is None:
+            return "ERROR: Either text or text_file_path must be provided"
+        
+        if text is not None and text_file_path is not None:
+            return "ERROR: Cannot provide both text and text_file_path"
+        
+        # If text_file_path is provided, read the text from file
+        if text_file_path is not None:
+            try:
+                if not os.path.exists(text_file_path):
+                    return f"ERROR: Text file not found: {text_file_path}"
+                with open(text_file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+            except Exception as e:
+                return f"ERROR: Failed to read text file: {str(e)}"
+
         # Initialize TTS if needed
         if tts_engine is None and not initialize_tts():
             return "ERROR: Failed to initialize text-to-speech engine."
-            
-        # Use the TTS engine's save_to_file method if available
-        if hasattr(tts_engine, 'save_to_file'):
-            # Use our adapter system's save_to_file method
-            tts_engine.save_to_file(text, output_path)
-            return f"Successfully saved speech to {output_path}"
+
+        # Ensure the output directory exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        # Use the adapter's save_to_file method
+        if tts_engine.save_to_file(text, output_path):
+            # Verify the file was created
+            if os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                if file_size > 0:
+                    return f"Successfully saved speech to {output_path} ({file_size} bytes)"
+                else:
+                    os.unlink(output_path)
+                    return f"ERROR: Generated file is empty: {output_path}"
+            else:
+                return f"ERROR: Failed to generate speech file: {output_path} was not created"
         else:
-            return "ERROR: Current TTS engine does not support saving to file."
-            
+            # If save_to_file failed, clean up any partial file
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            return "ERROR: Failed to save speech to file"
+
     except Exception as e:
+        # Clean up any partial file
+        try:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+        except Exception:
+            pass
         return f"ERROR: Failed to generate speech file: {str(e)}"
 
 @mcp.resource(uri="mcp://speech/usage_guide")
@@ -1190,48 +1289,3 @@ def transcription_guide() -> str:
         and speaker detection, please see the transcription_guide.md file in the
         speech-mcp repository.
         """
-    return """
-    # Asynchronous TTS Initialization
-    
-    The speech-mcp extension automatically initializes the Kokoro TTS engine when the server starts,
-    but now does so asynchronously in a background thread. This ensures that voice capabilities are 
-    immediately available without blocking the server startup process.
-    
-    ## How it works
-    
-    1. When the server starts, it launches a background thread to initialize the Kokoro TTS engine
-    2. The server continues to start up and respond to requests while Kokoro initializes
-    3. If a speech request comes in before Kokoro is fully initialized:
-       - The system will use a fallback TTS engine (pyttsx3) temporarily
-       - Once Kokoro initialization completes, it will be used for subsequent requests
-    4. The initialization status is tracked and logged for troubleshooting
-    
-    ## Voice Selection
-    
-    The asynchronous initialization will:
-    
-    1. Check for a voice preference in the environment variable `SPEECH_MCP_TTS_VOICE`
-    2. If not found, check the config file at `~/.config/speech-mcp/config.json`
-    3. If no preference is found, use the default voice "af_heart" (American female)
-    
-    ## Benefits
-    
-    - Server starts up quickly without waiting for TTS initialization
-    - Speech functionality is available immediately using fallback TTS if needed
-    - Kokoro is still used as the primary TTS engine once initialization completes
-    - Smooth transition from fallback to Kokoro without user intervention
-    
-    ## Troubleshooting
-    
-    If you experience issues with TTS initialization, check the logs at:
-    
-    ```
-    ~/.speech-mcp/logs/speech-mcp-server.log
-    ```
-    
-    Common issues include:
-    
-    - Kokoro not installed (install with `pip install kokoro`)
-    - Missing dependencies for Kokoro (torch, soundfile)
-    - Invalid voice selection in config or environment
-    """
