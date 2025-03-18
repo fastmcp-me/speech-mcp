@@ -117,18 +117,19 @@ class SpeechRecognizer:
             self.is_initialized = False
             return False
     
-    def transcribe(self, audio_file_path: str, language: str = "en") -> Tuple[str, Dict[str, Any]]:
+    def transcribe(self, audio_file_path: str, language: str = "en", include_timestamps: bool = False) -> Tuple[str, Dict[str, Any]]:
         """
         Transcribe an audio file using the available speech recognition engine.
         
         Args:
             audio_file_path: Path to the audio file to transcribe
             language: Language code for transcription (default: "en" for English)
+            include_timestamps: Whether to include word-level timestamps (default: False)
             
         Returns:
             Tuple containing:
-                - The transcribed text
-                - A dictionary with metadata about the transcription
+                - The transcribed text (or formatted text with timestamps if include_timestamps=True)
+                - A dictionary with metadata about the transcription and timing information
         """
         # Check if the file exists
         if not os.path.exists(audio_file_path):
@@ -148,28 +149,64 @@ class SpeechRecognizer:
                 logger.info(f"Transcribing audio with faster-whisper: {audio_file_path}")
                 
                 transcription_start = time.time()
-                segments, info = self.whisper_model.transcribe(audio_file_path, beam_size=5)
+                segments, info = self.whisper_model.transcribe(
+                    audio_file_path, 
+                    beam_size=5,
+                    word_timestamps=include_timestamps
+                )
                 
-                # Collect all segments to form the complete transcription
-                transcription = ""
-                for segment in segments:
-                    transcription += segment.text + " "
+                # Convert segments to list to avoid generator exhaustion
+                segments_list = list(segments)
                 
-                transcription = transcription.strip()
-                transcription_time = time.time() - transcription_start
+                if include_timestamps:
+                    # Format timestamped output
+                    from datetime import timedelta
+                    formatted_output = "TIMESTAMPED TRANSCRIPT\n"
+                    formatted_output += "===================\n\n"
+                    
+                    # Collect segments with timestamps
+                    segment_data = []
+                    for segment in segments_list:
+                        timestamp = str(timedelta(seconds=round(segment.start)))
+                        text = segment.text.strip()
+                        formatted_output += f"[{timestamp}] {text}\n"
+                        
+                        segment_data.append({
+                            "start": segment.start,
+                            "end": segment.end,
+                            "text": text,
+                            "words": [{"word": w.word, "start": w.start, "end": w.end} 
+                                    for w in (segment.words or [])]
+                        })
+                    
+                    transcription = formatted_output
+                    metadata = {
+                        "engine": "faster-whisper",
+                        "model": self.model_name,
+                        "time_taken": time.time() - transcription_start,
+                        "language": info.language,
+                        "language_probability": info.language_probability,
+                        "duration": info.duration,
+                        "segments": segment_data,
+                        "has_timestamps": True
+                    }
+                else:
+                    # Regular transcription without timestamps
+                    transcription = " ".join(segment.text for segment in segments_list).strip()
+                    metadata = {
+                        "engine": "faster-whisper",
+                        "model": self.model_name,
+                        "time_taken": time.time() - transcription_start,
+                        "language": info.language,
+                        "language_probability": info.language_probability,
+                        "duration": info.duration,
+                        "has_timestamps": False
+                    }
                 
-                logger.info(f"Transcription completed in {transcription_time:.2f}s: {transcription}")
+                logger.info(f"Transcription completed in {metadata['time_taken']:.2f}s")
                 logger.debug(f"Transcription info: {info}")
                 
-                # Return the transcription and metadata
-                return transcription, {
-                    "engine": "faster-whisper",
-                    "model": self.model_name,
-                    "time_taken": transcription_time,
-                    "language": info.language,
-                    "language_probability": info.language_probability,
-                    "duration": info.duration
-                }
+                return transcription, metadata
                 
             except Exception as e:
                 logger.error(f"Error transcribing with faster-whisper: {e}")
@@ -320,7 +357,7 @@ class SpeechRecognizer:
 # Create a singleton instance for easy import
 default_recognizer = SpeechRecognizer()
 
-def transcribe_audio(audio_file_path: str, language: str = "en") -> str:
+def transcribe_audio(audio_file_path: str, language: str = "en", include_timestamps: bool = False) -> Union[str, Tuple[str, Dict[str, Any]]]:
     """
     Transcribe an audio file using the default speech recognizer.
     
@@ -329,12 +366,22 @@ def transcribe_audio(audio_file_path: str, language: str = "en") -> str:
     Args:
         audio_file_path: Path to the audio file to transcribe
         language: Language code for transcription (default: "en" for English)
+        include_timestamps: Whether to include word-level timestamps (default: False)
         
     Returns:
-        The transcribed text
+        If include_timestamps=False:
+            The transcribed text as a string
+        If include_timestamps=True:
+            Tuple containing:
+                - The formatted text with timestamps
+                - A dictionary with metadata and timing information
     """
-    transcription, _ = default_recognizer.transcribe(audio_file_path, language)
-    return transcription
+    transcription, metadata = default_recognizer.transcribe(
+        audio_file_path, 
+        language=language,
+        include_timestamps=include_timestamps
+    )
+    return (transcription, metadata) if include_timestamps else transcription
 
 def initialize_speech_recognition(
     model_name: str = "base", 

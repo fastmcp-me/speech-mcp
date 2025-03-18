@@ -877,6 +877,155 @@ def close_ui() -> str:
     else:
         return "No active Speech UI found to close."
 
+@mcp.tool()
+def transcribe(file_path: str, include_timestamps: bool = False) -> str:
+    """
+    Transcribe an audio or video file to text.
+    
+    This tool uses faster-whisper to transcribe speech from audio/video files.
+    Supports various formats including mp3, wav, mp4, etc.
+    
+    The transcription is saved to two files:
+    - {input_name}.transcript.txt: Contains the transcription text (with timestamps if requested)
+    - {input_name}.metadata.json: Contains metadata about the transcription process
+    
+    Args:
+        file_path: Path to the audio or video file to transcribe
+        include_timestamps: Whether to include word-level timestamps (default: False)
+        
+    Returns:
+        A message indicating where the transcription was saved
+    """
+    try:
+        # Initialize speech recognition if not already done
+        import os
+        import json
+        from pathlib import Path
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return "ERROR: File not found."
+            
+        # Get file extension and create output paths
+        input_path = Path(file_path)
+        transcript_path = input_path.with_suffix('.transcript.txt')
+        metadata_path = input_path.with_suffix('.metadata.json')
+        
+        # Get file extension
+        ext = input_path.suffix.lower()
+        
+        # List of supported formats
+        audio_formats = {'.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg'}
+        video_formats = {'.mp4', '.mov', '.avi', '.mkv', '.webm'}
+        
+        if ext not in audio_formats and ext not in video_formats:
+            return f"ERROR: Unsupported file format '{ext}'. Supported formats: {', '.join(sorted(audio_formats | video_formats))}"
+        
+        # For video files, we'll extract the audio first
+        temp_audio = None
+        if ext in video_formats:
+            try:
+                import tempfile
+                from subprocess import run, PIPE
+                
+                # Create temporary file for audio
+                temp_dir = tempfile.gettempdir()
+                temp_audio = os.path.join(temp_dir, 'temp_audio.wav')
+                
+                # Use ffmpeg to extract audio
+                cmd = ['ffmpeg', '-i', str(file_path), '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', temp_audio]
+                result = run(cmd, stdout=PIPE, stderr=PIPE)
+                
+                if result.returncode != 0:
+                    return f"ERROR: Failed to extract audio from video: {result.stderr.decode()}"
+                    
+                # Update file_path to use the extracted audio
+                file_path = temp_audio
+                
+            except Exception as e:
+                return f"ERROR: Failed to process video file: {str(e)}"
+        
+        if not initialize_speech_recognition():
+            return "ERROR: Failed to initialize speech recognition."
+            
+        # Use the centralized speech recognition module
+        transcription, metadata = transcribe_audio_file(file_path, include_timestamps=include_timestamps)
+        
+        # Clean up temporary audio file if it was created
+        if temp_audio and os.path.exists(temp_audio):
+            try:
+                os.remove(temp_audio)
+            except Exception:
+                pass
+        
+        if not transcription:
+            return "ERROR: Transcription failed or returned empty result."
+        
+        # Save the transcription and metadata
+        try:
+            # Save transcription
+            with open(transcript_path, 'w', encoding='utf-8') as f:
+                f.write(transcription)
+            
+            # Save metadata
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            
+            # Return success message with file locations
+            msg = f"Transcription complete!\n\n"
+            msg += f"Transcript saved to: {transcript_path}\n"
+            msg += f"Metadata saved to: {metadata_path}\n\n"
+            
+            if include_timestamps:
+                msg += "The transcript includes timestamps for each segment.\n"
+            
+            # Add some metadata to the message
+            msg += f"\nDuration: {metadata.get('duration', 'unknown')} seconds\n"
+            msg += f"Language: {metadata.get('language', 'unknown')} "
+            msg += f"(probability: {metadata.get('language_probability', 0):.2f})\n"
+            msg += f"Processing time: {metadata.get('time_taken', 0):.2f} seconds"
+            
+            return msg
+            
+        except Exception as e:
+            return f"ERROR: Failed to save transcription files: {str(e)}"
+            
+    except Exception as e:
+        return f"ERROR: Failed to transcribe file: {str(e)}"
+
+@mcp.tool()
+def narrate(text: str, output_path: str) -> str:
+    """
+    Convert text to speech and save as an audio file.
+    
+    This will use the configured TTS engine to generate speech from text
+    and save it to the specified output path.
+    
+    Args:
+        text: The text to convert to speech
+        output_path: Path where to save the audio file (.wav)
+        
+    Returns:
+        A message indicating success or failure of the operation.
+    """
+    global tts_engine
+    
+    try:
+        # Initialize TTS if needed
+        if tts_engine is None and not initialize_tts():
+            return "ERROR: Failed to initialize text-to-speech engine."
+            
+        # Use the TTS engine's save_to_file method if available
+        if hasattr(tts_engine, 'save_to_file'):
+            # Use our adapter system's save_to_file method
+            tts_engine.save_to_file(text, output_path)
+            return f"Successfully saved speech to {output_path}"
+        else:
+            return "ERROR: Current TTS engine does not support saving to file."
+            
+    except Exception as e:
+        return f"ERROR: Failed to generate speech file: {str(e)}"
+
 @mcp.resource(uri="mcp://speech/usage_guide")
 def usage_guide() -> str:
     """
@@ -919,6 +1068,22 @@ def usage_guide() -> str:
        close_ui()
        ```
        This gracefully closes the speech UI window when you're finished with voice interaction.
+       
+    6. Transcribe audio/video files:
+       ```
+       transcription = transcribe("/path/to/media.mp4")
+       ```
+       This converts speech from media files to text. Supports various formats:
+       - Audio: mp3, wav, m4a, flac, aac, ogg
+       - Video: mp4, mov, avi, mkv, webm
+       For video files, the audio track is automatically extracted for transcription.
+       
+    7. Generate speech audio files:
+       ```
+       narrate("Your text to convert to speech", "/path/to/output.wav")
+       ```
+       This converts text to speech and saves it as a WAV file using the configured TTS engine.
+       Note: Requires a TTS engine that supports saving to file (like Kokoro).
     
     ## Typical Workflow
     
@@ -949,6 +1114,17 @@ def usage_guide() -> str:
     close_ui()
     ```
     
+    ## File Processing Examples
+    
+    ```python
+    # Transcribe an audio file
+    transcript = transcribe("recording.mp3")
+    print("Transcription:", transcript)
+    
+    # Generate a speech file
+    narrate("This text will be converted to speech", "output.wav")
+    ```
+    
     ## Tips
     
     - For best results, use a quiet environment and speak clearly
@@ -963,6 +1139,8 @@ def usage_guide() -> str:
       - Silence detection waits for 5 seconds of quiet before stopping recording
       - This allows for natural pauses in speech without cutting off
     - The overall listening timeout is set to 10 minutes to allow for extended thinking time or long pauses
+    - For file transcription, use high-quality audio for best results
+    - When generating speech files, ensure the output path ends with .wav extension
     """
 
 @mcp.resource(uri="mcp://speech/kokoro_tts")
