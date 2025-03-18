@@ -878,7 +878,7 @@ def close_ui() -> str:
         return "No active Speech UI found to close."
 
 @mcp.tool()
-def transcribe(file_path: str, include_timestamps: bool = False) -> str:
+def transcribe(file_path: str, include_timestamps: bool = False, detect_speakers: bool = False) -> str:
     """
     Transcribe an audio or video file to text.
     
@@ -886,12 +886,13 @@ def transcribe(file_path: str, include_timestamps: bool = False) -> str:
     Supports various formats including mp3, wav, mp4, etc.
     
     The transcription is saved to two files:
-    - {input_name}.transcript.txt: Contains the transcription text (with timestamps if requested)
+    - {input_name}.transcript.txt: Contains the transcription text (with timestamps/speakers if requested)
     - {input_name}.metadata.json: Contains metadata about the transcription process
     
     Args:
         file_path: Path to the audio or video file to transcribe
         include_timestamps: Whether to include word-level timestamps (default: False)
+        detect_speakers: Whether to attempt speaker detection (default: False)
         
     Returns:
         A message indicating where the transcription was saved
@@ -949,7 +950,11 @@ def transcribe(file_path: str, include_timestamps: bool = False) -> str:
             return "ERROR: Failed to initialize speech recognition."
             
         # Use the centralized speech recognition module
-        transcription, metadata = transcribe_audio_file(file_path, include_timestamps=include_timestamps)
+        transcription, metadata = transcribe_audio_file(
+            file_path, 
+            include_timestamps=include_timestamps,
+            detect_speakers=detect_speakers
+        )
         
         # Clean up temporary audio file if it was created
         if temp_audio and os.path.exists(temp_audio):
@@ -976,7 +981,11 @@ def transcribe(file_path: str, include_timestamps: bool = False) -> str:
             msg += f"Transcript saved to: {transcript_path}\n"
             msg += f"Metadata saved to: {metadata_path}\n\n"
             
-            if include_timestamps:
+            if detect_speakers:
+                msg += "The transcript includes speaker detection and timestamps.\n"
+                msg += f"Detected {len(metadata.get('speakers', {}))} speakers\n"
+                msg += f"Speaker changes: {metadata.get('speaker_changes', 0)}\n"
+            elif include_timestamps:
                 msg += "The transcript includes timestamps for each segment.\n"
             
             # Add some metadata to the message
@@ -1165,11 +1174,22 @@ def kokoro_tts_guide() -> str:
         For more information, see the documentation in the speech-mcp repository.
         """
 
-@mcp.resource(uri="mcp://speech/auto_initialization")
-def auto_initialization_guide() -> str:
+@mcp.resource(uri="mcp://speech/transcription_guide")
+def transcription_guide() -> str:
     """
-    Return information about automatic TTS initialization.
+    Return the transcription guide for speech-mcp.
     """
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "transcription_guide.md"), 'r') as f:
+            return f.read()
+    except Exception:
+        return """
+        # Speech Transcription Guide
+        
+        For detailed documentation on speech transcription features including timestamps
+        and speaker detection, please see the transcription_guide.md file in the
+        speech-mcp repository.
+        """
     return """
     # Asynchronous TTS Initialization
     

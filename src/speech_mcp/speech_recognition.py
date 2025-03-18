@@ -117,7 +117,8 @@ class SpeechRecognizer:
             self.is_initialized = False
             return False
     
-    def transcribe(self, audio_file_path: str, language: str = "en", include_timestamps: bool = False) -> Tuple[str, Dict[str, Any]]:
+    def transcribe(self, audio_file_path: str, language: str = "en", 
+                  include_timestamps: bool = False, detect_speakers: bool = False) -> Tuple[str, Dict[str, Any]]:
         """
         Transcribe an audio file using the available speech recognition engine.
         
@@ -125,6 +126,7 @@ class SpeechRecognizer:
             audio_file_path: Path to the audio file to transcribe
             language: Language code for transcription (default: "en" for English)
             include_timestamps: Whether to include word-level timestamps (default: False)
+            detect_speakers: Whether to attempt speaker detection (default: False)
             
         Returns:
             Tuple containing:
@@ -152,15 +154,79 @@ class SpeechRecognizer:
                 segments, info = self.whisper_model.transcribe(
                     audio_file_path, 
                     beam_size=5,
-                    word_timestamps=include_timestamps
+                    word_timestamps=include_timestamps or detect_speakers  # Need timestamps for speaker detection
                 )
                 
                 # Convert segments to list to avoid generator exhaustion
                 segments_list = list(segments)
                 
-                if include_timestamps:
-                    # Format timestamped output
-                    from datetime import timedelta
+                if detect_speakers:
+                    # Basic speaker detection using segment clustering
+                    speaker_segments = self._detect_speakers(segments_list)
+                    
+                    # Format output with speaker labels
+                    formatted_output = "SPEAKER-AWARE TRANSCRIPT\n"
+                    formatted_output += "=====================\n\n"
+                    
+                    # Track speaker stats
+                    speaker_stats = {}
+                    current_speaker = None
+                    speaker_changes = 0
+                    
+                    # Process segments with speaker information
+                    for segment in speaker_segments:
+                        speaker = segment["speaker"]
+                        text = segment["text"].strip()
+                        start = segment["start"]
+                        end = segment["end"]
+                        
+                        # Track speaker changes
+                        if speaker != current_speaker:
+                            formatted_output += f"\n[Speaker: {speaker}]\n"
+                            current_speaker = speaker
+                            if speaker_changes > 0:  # Don't count the first speaker
+                                speaker_changes += 1
+                        
+                        # Add timestamped text
+                        timestamp = str(timedelta(seconds=round(start)))
+                        formatted_output += f"[{timestamp}] {text}\n"
+                        
+                        # Update speaker statistics
+                        if speaker not in speaker_stats:
+                            speaker_stats[speaker] = {
+                                "talk_time": 0,
+                                "segments": 0,
+                                "first_appearance": start,
+                                "last_appearance": end
+                            }
+                        
+                        stats = speaker_stats[speaker]
+                        stats["talk_time"] += (end - start)
+                        stats["segments"] += 1
+                        stats["last_appearance"] = max(stats["last_appearance"], end)
+                    
+                    # Calculate average turn duration
+                    total_time = sum(s["talk_time"] for s in speaker_stats.values())
+                    avg_turn_duration = total_time / speaker_changes if speaker_changes > 0 else total_time
+                    
+                    transcription = formatted_output
+                    metadata = {
+                        "engine": "faster-whisper",
+                        "model": self.model_name,
+                        "time_taken": time.time() - transcription_start,
+                        "language": info.language,
+                        "language_probability": info.language_probability,
+                        "duration": info.duration,
+                        "has_timestamps": True,
+                        "has_speakers": True,
+                        "speakers": speaker_stats,
+                        "speaker_changes": speaker_changes,
+                        "average_turn_duration": avg_turn_duration,
+                        "segments": speaker_segments
+                    }
+                    
+                elif include_timestamps:
+                    # Format timestamped output without speaker detection
                     formatted_output = "TIMESTAMPED TRANSCRIPT\n"
                     formatted_output += "===================\n\n"
                     
@@ -188,10 +254,11 @@ class SpeechRecognizer:
                         "language_probability": info.language_probability,
                         "duration": info.duration,
                         "segments": segment_data,
-                        "has_timestamps": True
+                        "has_timestamps": True,
+                        "has_speakers": False
                     }
                 else:
-                    # Regular transcription without timestamps
+                    # Regular transcription without timestamps or speakers
                     transcription = " ".join(segment.text for segment in segments_list).strip()
                     metadata = {
                         "engine": "faster-whisper",
@@ -200,7 +267,8 @@ class SpeechRecognizer:
                         "language": info.language,
                         "language_probability": info.language_probability,
                         "duration": info.duration,
-                        "has_timestamps": False
+                        "has_timestamps": False,
+                        "has_speakers": False
                     }
                 
                 logger.info(f"Transcription completed in {metadata['time_taken']:.2f}s")
@@ -245,25 +313,81 @@ class SpeechRecognizer:
         
         return "", {"error": error_msg, "engine": "none"}
     
-    def cleanup_audio_file(self, audio_file_path: str) -> bool:
+    def _detect_speakers(self, segments) -> List[Dict]:
         """
-        Clean up a temporary audio file.
+        Basic speaker detection using segment clustering based on timing and content.
+        
+        This is a simple heuristic approach that:
+        1. Detects potential speaker changes based on pauses between segments
+        2. Analyzes text patterns that might indicate dialogue
+        3. Groups similar segments that likely belong to the same speaker
         
         Args:
-            audio_file_path: Path to the audio file to clean up
+            segments: List of transcribed segments from faster-whisper
             
         Returns:
-            bool: True if the file was cleaned up successfully, False otherwise
+            List of segments with speaker labels
         """
-        try:
-            if os.path.exists(audio_file_path):
-                logger.debug(f"Removing temporary audio file: {audio_file_path}")
-                os.unlink(audio_file_path)
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Error removing temporary audio file: {e}")
-            return False
+        MIN_PAUSE = 1.0  # Minimum pause that might indicate speaker change
+        DIALOGUE_PATTERNS = [
+            "said", "asked", "replied", "answered", "continued",
+            ":", "?", "!"  # Punctuation that might indicate dialogue
+        ]
+        
+        speaker_segments = []
+        current_speaker = "SPEAKER_00"
+        speaker_count = 1
+        
+        for i, segment in enumerate(segments):
+            is_speaker_change = False
+            
+            # Check for long pause from previous segment
+            if i > 0:
+                prev_end = segments[i-1].end
+                curr_start = segment.start
+                if curr_start - prev_end > MIN_PAUSE:
+                    is_speaker_change = True
+            
+            # Check for dialogue indicators in text
+            text = segment.text.lower()
+            for pattern in DIALOGUE_PATTERNS:
+                if pattern in text:
+                    is_speaker_change = True
+                    break
+            
+            # If this seems like a new speaker, increment speaker count
+            if is_speaker_change:
+                current_speaker = f"SPEAKER_{speaker_count:02d}"
+                speaker_count += 1
+            
+            # Add segment with speaker info
+            speaker_segments.append({
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text,
+                "speaker": current_speaker,
+                "words": [{"word": w.word, "start": w.start, "end": w.end}
+                         for w in (segment.words or [])]
+            })
+        
+        # Post-process to merge nearby segments from same speaker
+        merged_segments = []
+        for segment in speaker_segments:
+            if not merged_segments:
+                merged_segments.append(segment)
+                continue
+                
+            prev = merged_segments[-1]
+            if (prev["speaker"] == segment["speaker"] and 
+                segment["start"] - prev["end"] < MIN_PAUSE):
+                # Merge segments
+                prev["end"] = segment["end"]
+                prev["text"] += " " + segment["text"]
+                prev["words"].extend(segment["words"])
+            else:
+                merged_segments.append(segment)
+        
+        return merged_segments
     
     def get_available_models(self) -> List[Dict[str, Any]]:
         """
