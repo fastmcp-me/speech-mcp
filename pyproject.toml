@@ -1,6 +1,6 @@
 [project]
 name = "speech-mcp"
-version = "1.0.10"
+version = "1.0.13"
 description = "Speech MCP Server with command-line interface and Kokoro TTS support"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,11 +15,12 @@ dependencies = [
     "pyttsx3>=2.90",   # Add pyttsx3 for text-to-speech
     "psutil>=5.9.0",    # Add psutil for process management
     "kokoro>=0.8.4",   # Kokoro TTS
-    "soundfile",       # For audio file handling
+    "soundfile>=0.12.1",  # For audio file handling and multi-speaker narration
     "torch",           # Required by Kokoro
     "misaki[en]",      # G2P library for English
     "PyQt5>=5.15.0",   # Modern UI toolkit to replace tkinter
     "pydantic>=2.7.2,<3.0.0",  # Explicitly specify Pydantic v2 to resolve conflict
+    "ffmpeg>=1.4",
     "pip"
 ]
 

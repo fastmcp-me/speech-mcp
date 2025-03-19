@@ -1,8 +1,8 @@
 {
   "project": {
     "name": "speech-mcp",
-    "description": "Goose voice interaction extension with audio visualization",
-    "version": "0.4.0",
+    "description": "Speech MCP Server with command-line interface and Kokoro TTS support",
+    "version": "1.0.10",
     "type": "goose_extension",
     "python_min_version": "3.10"
   },
@@ -51,21 +51,53 @@
       "purpose": "Speak text and listen for response",
       "params": ["text: string to speak"],
       "returns": "User response transcription"
+    },
+    {
+      "name": "narrate_conversation",
+      "purpose": "Generate multi-speaker audio files",
+      "params": [
+        "script: JSON or markdown script defining the conversation",
+        "output_path: Path to save the audio file",
+        "script_format: 'json' or 'markdown' (default: 'json')",
+        "temp_dir: Optional directory for temporary files"
+      ],
+      "returns": "Success message with conversation summary"
     }
   ],
   "dependencies": {
-    "main": ["PyQt5>=5.15.0", "faster-whisper>=0.10.0", "pyaudio>=0.2.13", "pyttsx3>=2.90", "psutil>=5.9.0"],
-    "optional": ["kokoro>=0.8.4", "torch", "misaki[en,ja,zh]"]
+    "main": [
+      "mcp[cli]>=1.2.0",
+      "PyQt5>=5.15.0",
+      "faster-whisper>=0.10.0",
+      "SpeechRecognition>=3.10.0",
+      "numpy>=1.24.0",
+      "pyaudio>=0.2.13",
+      "pydub>=0.25.1",
+      "pyttsx3>=2.90",
+      "psutil>=5.9.0",
+      "kokoro>=0.8.4",
+      "soundfile",
+      "torch",
+      "misaki[en]",
+      "ffmpeg>=1.4",
+      "pydantic>=2.7.2,<3.0.0"
+    ],
+    "optional": {
+      "ja": ["misaki[ja]"],
+      "zh": ["misaki[zh]"],
+      "all": ["speech-mcp[ja,zh]"]
+    }
   },
   "features": {
     "ui": "PyQt dark theme with audio visualization and animations",
     "tts": "54+ voices via Kokoro with persistence",
-    "stt": "Local speech recognition with faster-whisper"
+    "stt": "Local speech recognition with faster-whisper and SpeechRecognition fallback"
   },
   "install": {
     "deeplink": "goose://extension?cmd=uvx&arg=speech-mcp&id=speech_mcp&name=Speech%20Interface&description=Voice%20interaction%20with%20audio%20visualization%20for%20Goose",
     "cli": "goose session --with-extension \"uvx speech-mcp\"",
-    "kokoro": "pip install speech-mcp[kokoro]"
+    "kokoro": "pip install speech-mcp[kokoro]",
+    "all": "pip install speech-mcp[all]"
   },
   "logs": ["~/.speech-mcp/logs/speech-mcp.log", "~/.speech-mcp/logs/speech-mcp-server.log", "~/.speech-mcp/logs/speech-mcp-ui.log"],
   "config_file": "~/.config/speech-mcp/config.json"

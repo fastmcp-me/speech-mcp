@@ -134,6 +134,43 @@ class Pyttsx3TTS(BaseTTSAdapter):
         finally:
             self.is_speaking = False
     
+    def save_to_file(self, text: str, file_path: str) -> bool:
+        """
+        Save speech as an audio file using pyttsx3.
+        
+        Args:
+            text: The text to convert to speech
+            file_path: Path where to save the audio file
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not text or not self.is_initialized or not self.engine:
+            return False
+            
+        try:
+            # Create a temporary wav file first
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_path = temp_file.name
+                
+                # Use pyttsx3's save_to_file
+                self.engine.save_to_file(text, temp_path)
+                self.engine.runAndWait()
+                
+                # Convert to the desired format if needed
+                import shutil
+                shutil.move(temp_path, file_path)
+                return True
+        except Exception:
+            # Clean up temp file if it exists
+            try:
+                if 'temp_path' in locals() and os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except Exception:
+                pass
+            return False
+    
     def get_available_voices(self) -> List[str]:
         """
         Get a list of available voices
