@@ -51,6 +51,17 @@
       "purpose": "Speak text and listen for response",
       "params": ["text: string to speak"],
       "returns": "User response transcription"
+    },
+    {
+      "name": "narrate_conversation",
+      "purpose": "Generate multi-speaker audio files",
+      "params": [
+        "script: JSON or markdown script defining the conversation",
+        "output_path: Path to save the audio file",
+        "script_format: 'json' or 'markdown' (default: 'json')",
+        "temp_dir: Optional directory for temporary files"
+      ],
+      "returns": "Success message with conversation summary"
     }
   ],
   "dependencies": {
