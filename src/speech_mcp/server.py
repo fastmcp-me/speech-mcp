@@ -7,7 +7,10 @@ import tempfile
 import subprocess
 import psutil
 import importlib.util
-from typing import Dict, Optional, Callable
+from typing import Dict, List, Union, Optional, Callable
+from pathlib import Path
+import numpy as np
+import soundfile as sf
 
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
@@ -533,6 +536,88 @@ def cleanup_ui_process():
 # Register cleanup function to be called on exit
 import atexit
 atexit.register(cleanup_ui_process)
+
+class VoiceInstance:
+    """Manages a single Kokoro TTS voice instance"""
+    def __init__(self, voice_id: str):
+        from speech_mcp.tts_adapters import KokoroTTS
+        self.engine = KokoroTTS(voice=voice_id, lang_code="en", speed=1.0)
+        self.voice_id = voice_id
+        
+        # Verify initialization
+        if not self.engine.is_initialized or not self.engine.kokoro_available:
+            raise Exception(f"Failed to initialize Kokoro TTS for voice {voice_id}")
+        
+        # Get available voices and organize them by category
+        available_voices = self.engine.get_available_voices()
+        
+        # Verify voice is available
+        if voice_id not in available_voices:
+            # Create a formatted list of voices by category
+            voice_categories = {
+                "American Female": [v for v in available_voices if v.startswith("af_")],
+                "American Male": [v for v in available_voices if v.startswith("am_")],
+                "British Female": [v for v in available_voices if v.startswith("bf_")],
+                "British Male": [v for v in available_voices if v.startswith("bm_")],
+                "Other English": [v for v in available_voices if v.startswith(("ef_", "em_"))],
+                "French": [v for v in available_voices if v.startswith("ff_")],
+                "Hindi": [v for v in available_voices if v.startswith(("hf_", "hm_"))],
+                "Italian": [v for v in available_voices if v.startswith(("if_", "im_"))],
+                "Japanese": [v for v in available_voices if v.startswith(("jf_", "jm_"))],
+                "Portuguese": [v for v in available_voices if v.startswith(("pf_", "pm_"))],
+                "Chinese": [v for v in available_voices if v.startswith(("zf_", "zm_"))]
+            }
+            
+            # Build error message
+            error_msg = [f"Voice '{voice_id}' not found. Available voices:"]
+            for category, voices in voice_categories.items():
+                if voices:  # Only show categories that have voices
+                    error_msg.append(f"\n{category}:")
+                    error_msg.append("  " + ", ".join(sorted(voices)))
+            
+            raise Exception("\n".join(error_msg))
+        
+    def generate_audio(self, text: str, output_path: str) -> bool:
+        """Generate audio for the given text"""
+        result = self.engine.save_to_file(text, output_path)
+        if not result:
+            # Create the same formatted error message as in __init__
+            available_voices = self.engine.get_available_voices()
+            voice_categories = {
+                "American Female": [v for v in available_voices if v.startswith("af_")],
+                "American Male": [v for v in available_voices if v.startswith("am_")],
+                "British Female": [v for v in available_voices if v.startswith("bf_")],
+                "British Male": [v for v in available_voices if v.startswith("bm_")],
+                "Other English": [v for v in available_voices if v.startswith(("ef_", "em_"))],
+                "French": [v for v in available_voices if v.startswith("ff_")],
+                "Hindi": [v for v in available_voices if v.startswith(("hf_", "hm_"))],
+                "Italian": [v for v in available_voices if v.startswith(("if_", "im_"))],
+                "Japanese": [v for v in available_voices if v.startswith(("jf_", "jm_"))],
+                "Portuguese": [v for v in available_voices if v.startswith(("pf_", "pm_"))],
+                "Chinese": [v for v in available_voices if v.startswith(("zf_", "zm_"))]
+            }
+            
+            error_msg = [f"Failed to generate audio with voice '{self.voice_id}'. Available voices:"]
+            for category, voices in voice_categories.items():
+                if voices:
+                    error_msg.append(f"\n{category}:")
+                    error_msg.append("  " + ", ".join(sorted(voices)))
+            
+            raise Exception("\n".join(error_msg))
+        return True
+
+class VoiceManager:
+    """Manages multiple voice instances"""
+    def __init__(self):
+        self._voices: Dict[str, VoiceInstance] = {}
+        
+    def get_voice(self, voice_id: str) -> VoiceInstance:
+        if voice_id not in self._voices:
+            self._voices[voice_id] = VoiceInstance(voice_id)
+        return self._voices[voice_id]
+
+# Global voice manager
+voice_manager = VoiceManager()
 
 @mcp.tool()
 def launch_ui() -> str:
@@ -1133,6 +1218,200 @@ def narrate(text: Optional[str] = None, text_file_path: Optional[str] = None, ou
         except Exception:
             pass
         return f"ERROR: Failed to generate speech file: {str(e)}"
+
+def parse_markdown_script(script: str) -> List[Dict]:
+    """Parse the markdown-format script into segments"""
+    segments = []
+    current_segment = None
+    
+    for line in script.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+            
+        if line.startswith('[') and line.endswith(']'):
+            # New speaker definition
+            if current_segment:
+                current_segment["text"] = current_segment["text"].strip()
+                segments.append(current_segment)
+            
+            # Parse speaker and voice
+            content = line[1:-1]
+            speaker, voice = content.split(':')
+            current_segment = {
+                "speaker": speaker.strip(),
+                "voice": voice.strip(),
+                "text": ""
+            }
+        elif line.startswith('{pause:') and line.endswith('}'):
+            # Parse pause duration
+            pause = float(line[7:-1])
+            if current_segment:
+                current_segment["pause_after"] = pause
+        elif current_segment is not None:
+            # Add text to current segment
+            current_segment["text"] += line + "\n"
+    
+    # Add final segment
+    if current_segment:
+        current_segment["text"] = current_segment["text"].strip()
+        segments.append(current_segment)
+    
+    return segments
+
+@mcp.tool()
+def narrate_conversation(
+    script: Union[str, Dict],
+    output_path: str,
+    script_format: str = "json",
+    temp_dir: Optional[str] = None
+) -> str:
+    """
+    Generate a multi-speaker conversation audio file using multiple Kokoro TTS instances.
+    
+    Args:
+        script: Either a JSON string/dict, a path to a script file, or a markdown-formatted script
+        output_path: Path where to save the final audio file (.wav)
+        script_format: Format of the script ("json" or "markdown")
+        temp_dir: Optional directory for temporary files (default: system temp)
+    
+    Script Format Examples:
+    
+    JSON:
+    {
+        "conversation": [
+            {
+                "speaker": "narrator",
+                "voice": "en_joe",
+                "text": "Once upon a time...",
+                "pause_after": 1.0
+            },
+            {
+                "speaker": "alice", 
+                "voice": "en_rachel",
+                "text": "Hello there!",
+                "pause_after": 0.5
+            }
+        ]
+    }
+    
+    Markdown:
+    [narrator:en_joe]
+    Once upon a time...
+    {pause:1.0}
+
+    [alice:en_rachel]
+    Hello there!
+    {pause:0.5}
+    
+    Returns:
+        A message indicating success or failure of the operation.
+    """
+    try:
+        # Create temp directory if not provided
+        if temp_dir is None:
+            temp_dir = tempfile.mkdtemp()
+        temp_dir = Path(temp_dir)
+        
+        # Handle script input
+        if isinstance(script, str):
+            # Check if it's a file path
+            script_path = Path(os.path.expanduser(script))
+            if script_path.exists():
+                with open(script_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if script_format == "json":
+                        script = json.loads(content)
+                    else:
+                        script = content
+            elif script_format == "json" and (script.startswith('{') or script.startswith('[')):
+                # It's a JSON string
+                script = json.loads(script)
+        
+        # Parse the script
+        if script_format == "json":
+            if isinstance(script, str):
+                conversation = json.loads(script)
+            else:
+                conversation = script
+            segments = conversation["conversation"]
+        else:
+            segments = parse_markdown_script(script)
+        
+        # Expand output path
+        output_path = os.path.expanduser(output_path)
+        
+        # Create output directory if it doesn't exist
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        
+        # Track sample rate from first segment for consistency
+        sample_rate = None
+        
+        # Generate individual audio segments
+        audio_segments = []
+        for i, segment in enumerate(segments):
+            voice_id = segment["voice"]
+            
+            # Get or create voice instance
+            voice = voice_manager.get_voice(voice_id)
+            
+            # Generate temp filename
+            temp_file = temp_dir / f"segment_{i}.wav"
+            
+            # Generate audio for this segment
+            success = voice.generate_audio(segment["text"], str(temp_file))
+            if not success:
+                raise Exception(f"Failed to generate audio for segment {i} with voice {voice_id}")
+            
+            # Load the audio data
+            audio_data, sr = sf.read(str(temp_file))
+            
+            # Set sample rate from first segment
+            if sample_rate is None:
+                sample_rate = sr
+            elif sr != sample_rate:
+                raise Exception(f"Inconsistent sample rates: {sr} != {sample_rate}")
+            
+            # Add pause after segment if specified
+            if "pause_after" in segment:
+                pause_samples = int(segment["pause_after"] * sample_rate)
+                pause = np.zeros(pause_samples)
+                audio_data = np.concatenate([audio_data, pause])
+            
+            audio_segments.append(audio_data)
+            
+            # Clean up temp file
+            temp_file.unlink()
+        
+        # Combine all segments
+        final_audio = np.concatenate(audio_segments)
+        
+        # Save final audio
+        sf.write(output_path, final_audio, sample_rate)
+        
+        # Clean up temp directory
+        if temp_dir != Path(tempfile.gettempdir()):
+            temp_dir.rmdir()
+        
+        # Generate summary of the conversation
+        summary = "\nConversation Summary:\n"
+        for i, segment in enumerate(segments, 1):
+            summary += f"{i}. {segment['speaker']} ({segment['voice']}): {segment['text'][:50]}...\n"
+        
+        return f"Successfully generated conversation audio at {output_path}\n{summary}"
+        
+    except Exception as e:
+        # Clean up temp directory on error
+        if temp_dir and temp_dir != Path(tempfile.gettempdir()):
+            try:
+                for file in temp_dir.glob("*.wav"):
+                    file.unlink()
+                temp_dir.rmdir()
+            except Exception:
+                pass
+        return f"ERROR: Failed to generate conversation: {str(e)}"
 
 @mcp.resource(uri="mcp://speech/usage_guide")
 def usage_guide() -> str:
