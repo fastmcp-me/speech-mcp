@@ -16,9 +16,12 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 
+# Import state manager
+from speech_mcp.state_manager import StateManager
+
 # Import centralized constants
 from speech_mcp.constants import (
-    STATE_FILE, TRANSCRIPTION_FILE, RESPONSE_FILE, COMMAND_FILE,
+    TRANSCRIPTION_FILE, RESPONSE_FILE, COMMAND_FILE,
     CMD_LISTEN, CMD_SPEAK, CMD_IDLE, CMD_UI_READY, CMD_UI_CLOSED,
     ENV_TTS_VOICE
 )
@@ -45,6 +48,9 @@ class PyQtSpeechUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("Goose Speech Interface")
         self.resize(500, 300)
+        
+        # Initialize state manager
+        self.state_manager = StateManager.get_instance()
         
         # Set initial loading state
         self.tts_ready = False
@@ -524,6 +530,9 @@ class PyQtSpeechUI(QMainWindow):
             
         self.audio_processor.start_listening()
         
+        # Update state
+        self.state_manager.update_state({"listening": True})
+        
         # Activate user visualizer, deactivate agent visualizer
         self.set_user_visualizer_active(True)
         self.set_agent_visualizer_active(False)
@@ -536,12 +545,18 @@ class PyQtSpeechUI(QMainWindow):
             
         self.audio_processor.stop_listening()
         
+        # Update state
+        self.state_manager.update_state({"listening": False})
+        
         # Deactivate user visualizer
         self.set_user_visualizer_active(False)
     
     def on_speaking_started(self):
         """Called when speaking starts."""
         self.speak_button.setEnabled(False)
+        
+        # Update state
+        self.state_manager.update_state({"speaking": True})
         
         # Record when speaking started for the watchdog timer
         self._speaking_start_time = time.time()
@@ -562,6 +577,9 @@ class PyQtSpeechUI(QMainWindow):
     def on_speaking_finished(self):
         """Called when speaking finishes."""
         self.speak_button.setEnabled(True)
+        
+        # Update state
+        self.state_manager.update_state({"speaking": False})
         
         # Clear the speaking start time
         if hasattr(self, '_speaking_start_time'):
@@ -657,6 +675,12 @@ class PyQtSpeechUI(QMainWindow):
         # Stop audio processor if it exists
         if hasattr(self, 'audio_processor') and self.audio_processor:
             self.audio_processor.stop_listening()
+        
+        # Update state
+        self.state_manager.update_state({
+            "ui_active": False,
+            "ui_process_id": None
+        })
         
         # Write a UI_CLOSED command to the command file
         try:

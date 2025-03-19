@@ -24,11 +24,14 @@ logger = get_logger(__name__, component="server")
 
 # Import centralized constants
 from speech_mcp.constants import (
-    STATE_FILE, DEFAULT_SPEECH_STATE, SERVER_LOG_FILE,
+    SERVER_LOG_FILE,
     TRANSCRIPTION_FILE, RESPONSE_FILE, COMMAND_FILE,
     CMD_LISTEN, CMD_SPEAK, CMD_IDLE, CMD_UI_READY, CMD_UI_CLOSED,
     SPEECH_TIMEOUT, ENV_TTS_VOICE
 )
+
+# Import state manager
+from speech_mcp.state_manager import StateManager
 
 # Import shared audio processor and speech recognition
 from speech_mcp.audio_processor import AudioProcessor
@@ -123,28 +126,13 @@ kokoro_init_thread = threading.Thread(target=async_kokoro_init)
 kokoro_init_thread.daemon = True
 kokoro_init_thread.start()
 
-# Load speech state from file or use default
-def load_speech_state():
-    try:
-        if os.path.exists(STATE_FILE):
-            logger.debug(f"Loading speech state from {STATE_FILE}")
-            with open(STATE_FILE, 'r') as f:
-                state = json.load(f)
-                logger.debug(f"Speech state loaded: {state}")
-                return state
-        else:
-            logger.debug(f"State file {STATE_FILE} not found, using default state")
-            return DEFAULT_SPEECH_STATE.copy()
-    except Exception as e:
-        logger.error(f"Error loading speech state: {e}")
-        return DEFAULT_SPEECH_STATE.copy()
+# State management has been moved to StateManager class
 
-# Save speech state to file
+# Save speech state using StateManager
 def save_speech_state(state, create_response_file=False):
     try:
-        logger.debug(f"Saving speech state to {STATE_FILE}")
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f)
+        # Update state in StateManager
+        state_manager.update_state(state, persist=True)
         
         # Only create response file if specifically requested
         if create_response_file:
@@ -172,8 +160,9 @@ def save_speech_state(state, create_response_file=False):
         logger.error(f"Error saving speech state: {e}")
         pass
 
-# Initialize speech state
-speech_state = load_speech_state()
+# Initialize state manager
+state_manager = StateManager.get_instance()
+speech_state = state_manager.get_state()  # Get a copy of the current state
 
 def initialize_speech_recognition():
     """Initialize speech recognition"""
@@ -748,9 +737,16 @@ def start_conversation() -> str:
     """
     global speech_state
     
-    # Force reset the speech state to avoid any stuck states
-    speech_state = DEFAULT_SPEECH_STATE.copy()
-    save_speech_state(speech_state, False)
+    # Force reset the state
+    state_manager.update_state({
+        "listening": False,
+        "speaking": False,
+        "last_transcript": "",
+        "last_response": "",
+        "ui_active": False,
+        "ui_process_id": None,
+        "error": None
+    })
     
     # Initialize speech recognition if not already done
     if not initialize_speech_recognition():
