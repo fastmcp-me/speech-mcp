@@ -3,10 +3,14 @@ Audio processing module for speech-mcp.
 
 This module provides centralized audio processing functionality including:
 - Audio device selection
-- Audio recording
+- Audio recording (with both traditional and streaming modes)
 - Audio playback
 - Audio level visualization
-- Silence detection
+- Silence detection (in traditional mode)
+
+The module supports two recording modes:
+1. Traditional mode: Uses silence detection to automatically stop recording
+2. Streaming mode: Continuously streams audio chunks to a callback function
 """
 
 import os
@@ -52,6 +56,8 @@ class AudioProcessor:
         self.audio_frames = []
         self.on_audio_level = on_audio_level
         self._on_recording_complete = None
+        self._on_audio_chunk = None  # Callback for streaming mode
+        self._streaming_mode = False  # Flag for streaming mode
         self._setup_audio()
     
     def _setup_audio(self) -> None:
@@ -96,7 +102,11 @@ class AudioProcessor:
         except Exception as e:
             logger.error(f"Error setting up audio: {e}")
     
-    def start_listening(self, callback: Optional[Callable] = None, on_recording_complete: Optional[Callable[[str], None]] = None) -> bool:
+    def start_listening(self, 
+                   callback: Optional[Callable] = None, 
+                   on_recording_complete: Optional[Callable[[str], None]] = None,
+                   streaming_mode: bool = False,
+                   on_audio_chunk: Optional[Callable[[bytes], None]] = None) -> bool:
         """
         Start listening for audio input.
         
@@ -104,6 +114,8 @@ class AudioProcessor:
             callback: Optional callback function to call when audio data is received
             on_recording_complete: Optional callback function to call when recording is complete,
                                   receives the path to the recorded audio file as an argument
+            streaming_mode: Whether to use streaming mode (no silence detection)
+            on_audio_chunk: Optional callback function to receive audio chunks in streaming mode
             
         Returns:
             bool: True if listening started successfully, False otherwise
@@ -115,6 +127,8 @@ class AudioProcessor:
         self.is_listening = True
         self.audio_frames = []
         self._on_recording_complete = on_recording_complete
+        self._streaming_mode = streaming_mode
+        self._on_audio_chunk = on_audio_chunk
         
         # Play start listening notification sound
         threading.Thread(target=self.play_audio_file, args=(START_LISTENING_SOUND,), daemon=True).start()
@@ -147,6 +161,10 @@ class AudioProcessor:
                     # Process audio for visualization
                     self._process_audio_for_visualization(in_data)
                     
+                    # Call streaming callback if in streaming mode
+                    if self._streaming_mode and self._on_audio_chunk:
+                        self._on_audio_chunk(in_data)
+                    
                     # Call user-provided callback if available
                     if callback:
                         callback(in_data)
@@ -177,15 +195,16 @@ class AudioProcessor:
             
             logger.info("Audio stream initialized and receiving data")
             
-            # Start a thread to detect silence and stop recording
-            def silence_detection_thread():
-                self._detect_silence()
-                # If recording completed and callback is provided, get the audio path and call the callback
-                if self._on_recording_complete and not self.is_listening:
-                    audio_path = self.get_recorded_audio_path()
-                    self._on_recording_complete(audio_path)
-            
-            threading.Thread(target=silence_detection_thread, daemon=True).start()
+            # Start silence detection thread only if not in streaming mode
+            if not self._streaming_mode:
+                def silence_detection_thread():
+                    self._detect_silence()
+                    # If recording completed and callback is provided, get the audio path and call the callback
+                    if self._on_recording_complete and not self.is_listening:
+                        audio_path = self.get_recorded_audio_path()
+                        self._on_recording_complete(audio_path)
+                
+                threading.Thread(target=silence_detection_thread, daemon=True).start()
             
             return True
             
@@ -314,20 +333,24 @@ class AudioProcessor:
         except Exception:
             return None
     
-    def record_audio(self) -> Optional[str]:
+    def record_audio(self, streaming_mode: bool = False, on_audio_chunk: Optional[Callable[[bytes], None]] = None) -> Optional[str]:
         """
         Record audio from the microphone and return the path to the audio file.
         
         This is a blocking method that handles the entire recording process including
         starting recording, detecting silence, and stopping recording.
         
+        Args:
+            streaming_mode: Whether to use streaming mode (no silence detection)
+            on_audio_chunk: Optional callback function to receive audio chunks in streaming mode
+            
         Returns:
             str: Path to the recorded audio file, or None if an error occurred
         """
-        if not self.start_listening():
+        if not self.start_listening(streaming_mode=streaming_mode, on_audio_chunk=on_audio_chunk):
             return None
         
-        # Wait for recording to complete (silence detection will stop it)
+        # Wait for recording to complete (silence detection will stop it in non-streaming mode)
         while self.is_listening:
             time.sleep(0.1)
         

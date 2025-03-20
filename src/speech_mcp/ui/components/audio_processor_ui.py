@@ -64,7 +64,7 @@ class AudioProcessorUI(QObject):
     def start_listening(self):
         """Start listening for audio input."""
         if self.is_listening:
-            logger.info("Already listening, ignoring start_listening call")
+            logger.debug("Already listening, ignoring start_listening call")
             return
             
         self.is_listening = True

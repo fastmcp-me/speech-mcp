@@ -72,3 +72,10 @@ SILENCE_THRESHOLD = 0.02  # Threshold for detecting silence (higher = less sensi
 MAX_SILENCE_DURATION = 3.0  # 3 seconds of silence to stop recording
 SILENCE_CHECK_INTERVAL = 0.1  # Check every 100ms
 SPEECH_TIMEOUT = 600  # 10 minutes timeout for speech recognition
+
+# Streaming transcription parameters
+STREAMING_END_SILENCE_DURATION = 2.0  # 2 seconds without new words to end streaming
+STREAMING_PROCESSING_INTERVAL = 0.1   # Process streaming audio every 100ms
+STREAMING_BUFFER_SIZE = 10  # Number of chunks to buffer before processing (about 0.5 seconds)
+STREAMING_MAX_BUFFER_SIZE = 100  # Maximum buffer size to prevent memory issues
+STREAMING_MIN_WORDS = 2  # Minimum number of words before considering end of speech

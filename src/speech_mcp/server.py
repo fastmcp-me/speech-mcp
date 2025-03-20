@@ -35,8 +35,15 @@ from speech_mcp.state_manager import StateManager
 
 # Import shared audio processor and speech recognition
 from speech_mcp.audio_processor import AudioProcessor
-from speech_mcp.speech_recognition import initialize_speech_recognition as init_speech_recognition
-from speech_mcp.speech_recognition import transcribe_audio as transcribe_audio_file
+from speech_mcp.speech_recognition import (
+    initialize_speech_recognition as init_speech_recognition,
+    transcribe_audio as transcribe_audio_file,
+    start_streaming_transcription,
+    add_streaming_audio_chunk,
+    stop_streaming_transcription,
+    get_current_streaming_transcription,
+    is_streaming_active
+)
 
 mcp = FastMCP("speech")
 
@@ -321,6 +328,74 @@ def record_audio():
     except Exception as e:
         raise Exception(f"Error recording audio: {str(e)}")
 
+def record_audio_streaming():
+    """Record audio using streaming transcription and return the transcription"""
+    try:
+        # Create AudioProcessor instance
+        audio_processor = AudioProcessor()
+        
+        # Initialize speech recognition
+        if not initialize_speech_recognition():
+            raise Exception("Failed to initialize speech recognition")
+        
+        # Set up result storage and synchronization
+        transcription_result = {"text": "", "metadata": {}}
+        transcription_ready = threading.Event()
+        
+        # Define callbacks for streaming transcription
+        def on_partial_transcription(text):
+            # Log partial transcription
+            logger.debug(f"Partial transcription: {text}")
+            # Update state with partial transcription
+            speech_state["last_transcript"] = text
+            save_speech_state(speech_state, False)
+        
+        def on_final_transcription(text, metadata):
+            # Log final transcription
+            logger.info(f"Final transcription: {text}")
+            # Store result and signal completion
+            transcription_result["text"] = text
+            transcription_result["metadata"] = metadata
+            transcription_ready.set()
+        
+        # Start streaming transcription
+        if not start_streaming_transcription(
+            language="en",
+            on_partial_transcription=on_partial_transcription,
+            on_final_transcription=on_final_transcription
+        ):
+            raise Exception("Failed to start streaming transcription")
+        
+        # Start audio recording in streaming mode
+        if not audio_processor.start_listening(
+            streaming_mode=True,
+            on_audio_chunk=add_streaming_audio_chunk
+        ):
+            stop_streaming_transcription()
+            raise Exception("Failed to start audio recording")
+        
+        # Wait for transcription to complete (with timeout)
+        max_wait_time = 600  # 10 minutes maximum
+        if not transcription_ready.wait(max_wait_time):
+            logger.warning("Transcription timeout reached")
+        
+        # Stop audio recording
+        audio_processor.stop_listening()
+        
+        # If streaming is still active, stop it
+        if is_streaming_active():
+            text, metadata = stop_streaming_transcription()
+            if not transcription_result["text"]:
+                transcription_result["text"] = text
+                transcription_result["metadata"] = metadata
+        
+        # Return the transcription
+        return transcription_result["text"]
+        
+    except Exception as e:
+        logger.error(f"Error in streaming audio recording: {str(e)}")
+        raise Exception(f"Error recording audio: {str(e)}")
+
 def transcribe_audio(audio_file_path):
     """Transcribe audio file using the speech recognition module"""
     try:
@@ -468,11 +543,8 @@ def listen_for_speech() -> str:
     save_speech_state(speech_state, False)
     
     try:
-        # Record audio
-        audio_file_path = record_audio()
-        
-        # Transcribe audio
-        transcription = transcribe_audio(audio_file_path)
+        # Use streaming transcription
+        transcription = record_audio_streaming()
         
         # Update state
         speech_state["listening"] = False
