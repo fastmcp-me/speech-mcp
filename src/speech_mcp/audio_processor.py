@@ -51,6 +51,7 @@ class AudioProcessor:
         self.is_listening = False
         self.audio_frames = []
         self.on_audio_level = on_audio_level
+        self._on_recording_complete = None
         self._setup_audio()
     
     def _setup_audio(self) -> None:
@@ -95,12 +96,14 @@ class AudioProcessor:
         except Exception as e:
             logger.error(f"Error setting up audio: {e}")
     
-    def start_listening(self, callback: Optional[Callable] = None) -> bool:
+    def start_listening(self, callback: Optional[Callable] = None, on_recording_complete: Optional[Callable[[str], None]] = None) -> bool:
         """
         Start listening for audio input.
         
         Args:
             callback: Optional callback function to call when audio data is received
+            on_recording_complete: Optional callback function to call when recording is complete,
+                                  receives the path to the recorded audio file as an argument
             
         Returns:
             bool: True if listening started successfully, False otherwise
@@ -111,6 +114,7 @@ class AudioProcessor:
             
         self.is_listening = True
         self.audio_frames = []
+        self._on_recording_complete = on_recording_complete
         
         # Play start listening notification sound
         threading.Thread(target=self.play_audio_file, args=(START_LISTENING_SOUND,), daemon=True).start()
@@ -174,7 +178,14 @@ class AudioProcessor:
             logger.info("Audio stream initialized and receiving data")
             
             # Start a thread to detect silence and stop recording
-            threading.Thread(target=self._detect_silence, daemon=True).start()
+            def silence_detection_thread():
+                self._detect_silence()
+                # If recording completed and callback is provided, get the audio path and call the callback
+                if self._on_recording_complete and not self.is_listening:
+                    audio_path = self.get_recorded_audio_path()
+                    self._on_recording_complete(audio_path)
+            
+            threading.Thread(target=silence_detection_thread, daemon=True).start()
             
             return True
             
