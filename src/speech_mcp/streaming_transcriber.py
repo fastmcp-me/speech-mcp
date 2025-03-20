@@ -11,9 +11,17 @@ import threading
 import queue
 import numpy as np
 from faster_whisper import WhisperModel
-import logging
+import time
 
-logger = logging.getLogger(__name__)
+# Import the centralized logger
+from speech_mcp.utils.logger import get_logger
+from speech_mcp.constants import (
+    STREAMING_END_SILENCE_DURATION,
+    STREAMING_INITIAL_WAIT
+)
+
+# Get a logger for this module
+logger = get_logger(__name__, component="stt")
 
 class StreamingTranscriber:
     """
@@ -52,7 +60,10 @@ class StreamingTranscriber:
         self._audio_queue = queue.Queue()
         self._audio_buffer = []
         self._current_transcription = ""
+        self._accumulated_transcription = ""  # New: Store all transcribed segments
         self._last_word_time = 0.0
+        self._last_word_detected = time.time()
+        self._stream_start_time = 0.0  # New: Track when streaming started
         self._is_active = False
         self._processing_thread = None
         self._lock = threading.Lock()
@@ -86,7 +97,10 @@ class StreamingTranscriber:
             self._audio_queue = queue.Queue()
             self._audio_buffer = []
             self._current_transcription = ""
+            self._accumulated_transcription = ""  # Reset accumulated transcription
             self._last_word_time = 0.0
+            self._last_word_detected = time.time()
+            self._stream_start_time = time.time()  # Set stream start time
             
             # Start the processing thread
             self._is_active = True
@@ -136,6 +150,20 @@ class StreamingTranscriber:
                     logger.debug(f"Processing buffer with {len(self._audio_buffer)} chunks")
                     self._transcribe_buffer()
                     
+                # Check if we're still in initial wait period
+                time_since_start = time.time() - self._stream_start_time
+                if time_since_start < STREAMING_INITIAL_WAIT:
+                    continue
+                    
+                # Check for end of speech based on word timing
+                current_time = time.time()
+                time_since_last_word = current_time - self._last_word_detected
+                if time_since_last_word > STREAMING_END_SILENCE_DURATION:
+                    logger.info(f"No new words detected for {time_since_last_word:.1f} seconds, stopping")
+                    # Process any remaining audio and notify through callbacks
+                    self.stop_streaming()
+                    break
+                    
             except queue.Empty:
                 # No new audio data, but process buffer if we have enough
                 if len(self._audio_buffer) >= 10:
@@ -181,11 +209,19 @@ class StreamingTranscriber:
                     
                     # Update last word time if words are available
                     if segment.words:
+                        # Log each word with its timing
+                        for word in segment.words:
+                            logger.debug(f"Word: {word.word}, Start: {word.start:.2f}s, End: {word.end:.2f}s")
                         self._last_word_time = segment.words[-1].end
-                        logger.debug(f"Words detected: {[w.word for w in segment.words]}")
+                        self._last_word_detected = time.time()
+                        logger.debug(f"Updated last word time to {self._last_word_time:.2f}s")
                 
                 if new_text:
-                    self._current_transcription = new_text.strip()
+                    # Append to accumulated transcription and update current
+                    self._accumulated_transcription += " " + new_text.strip()
+                    self._accumulated_transcription = self._accumulated_transcription.strip()
+                    self._current_transcription = self._accumulated_transcription
+                    
                     logger.info(f"Updated transcription: {self._current_transcription}")
                     
                     # Call partial transcription callback if provided
@@ -216,8 +252,8 @@ class StreamingTranscriber:
             # Set flag to stop processing thread
             self._is_active = False
             
-            # Wait for processing thread to finish
-            if self._processing_thread:
+            # Wait for processing thread to finish if it's not the current thread
+            if self._processing_thread and self._processing_thread is not threading.current_thread():
                 self._processing_thread.join(timeout=5.0)
             
             # Process any remaining audio in the buffer
@@ -229,7 +265,8 @@ class StreamingTranscriber:
                 final_text = self._current_transcription
                 metadata = {
                     "last_word_time": self._last_word_time,
-                    "language": self.language
+                    "language": self.language,
+                    "time_since_last_word": time.time() - self._last_word_detected
                 }
             
             # Call final transcription callback if provided
@@ -248,6 +285,7 @@ class StreamingTranscriber:
             self._audio_buffer = []
             self._current_transcription = ""
             self._last_word_time = 0.0
+            self._last_word_detected = time.time()
     
     def get_current_transcription(self) -> str:
         """

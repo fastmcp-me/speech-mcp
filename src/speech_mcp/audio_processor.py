@@ -105,7 +105,7 @@ class AudioProcessor:
     def start_listening(self, 
                    callback: Optional[Callable] = None, 
                    on_recording_complete: Optional[Callable[[str], None]] = None,
-                   streaming_mode: bool = False,
+                   streaming_mode: bool = True,  # Force streaming mode to True
                    on_audio_chunk: Optional[Callable[[bytes], None]] = None) -> bool:
         """
         Start listening for audio input.
@@ -114,14 +114,14 @@ class AudioProcessor:
             callback: Optional callback function to call when audio data is received
             on_recording_complete: Optional callback function to call when recording is complete,
                                   receives the path to the recorded audio file as an argument
-            streaming_mode: Whether to use streaming mode (no silence detection)
+            streaming_mode: Whether to use streaming mode (no silence detection) - Currently forced to True
             on_audio_chunk: Optional callback function to receive audio chunks in streaming mode
             
         Returns:
             bool: True if listening started successfully, False otherwise
         """
         if self.is_listening:
-            logger.info("Already listening, ignoring start_listening call")
+            logger.debug("Already listening, ignoring start_listening call")
             return True
             
         self.is_listening = True
@@ -333,15 +333,15 @@ class AudioProcessor:
         except Exception:
             return None
     
-    def record_audio(self, streaming_mode: bool = False, on_audio_chunk: Optional[Callable[[bytes], None]] = None) -> Optional[str]:
+    def record_audio(self, streaming_mode: bool = True, on_audio_chunk: Optional[Callable[[bytes], None]] = None) -> Optional[str]:
         """
         Record audio from the microphone and return the path to the audio file.
         
         This is a blocking method that handles the entire recording process including
-        starting recording, detecting silence, and stopping recording.
+        starting recording and streaming transcription. Silence detection is disabled.
         
         Args:
-            streaming_mode: Whether to use streaming mode (no silence detection)
+            streaming_mode: Whether to use streaming mode (forced to True)
             on_audio_chunk: Optional callback function to receive audio chunks in streaming mode
             
         Returns:
