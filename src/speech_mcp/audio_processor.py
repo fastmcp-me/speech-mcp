@@ -22,7 +22,7 @@ from typing import Optional, List, Tuple, Callable, Any, Dict
 from speech_mcp.utils.logger import get_logger
 
 # Get a logger for this module
-logger = get_logger(__name__, component="server")
+logger = get_logger(__name__, component="stt")
 
 # Import centralized constants
 from speech_mcp.constants import (
