@@ -56,9 +56,10 @@ def test_global_functions():
     assert result, "initialize_speech_recognition failed"
     logger.info("initialize_speech_recognition successful")
     
-    # Test transcribe_audio with a non-existent file (should return empty string)
-    transcription = transcribe_audio("non_existent_file.wav")
+    # Test transcribe_audio with a non-existent file (should return empty string and error metadata)
+    transcription, metadata = transcribe_audio("non_existent_file.wav")
     assert transcription == "", "Expected empty transcription for non-existent file"
+    assert metadata.get('error') is not None, "Expected error metadata for non-existent file"
     logger.info("transcribe_audio with non-existent file test passed")
 
 def main():

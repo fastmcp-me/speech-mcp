@@ -24,16 +24,26 @@ logger = get_logger(__name__, component="server")
 
 # Import centralized constants
 from speech_mcp.constants import (
-    STATE_FILE, DEFAULT_SPEECH_STATE, SERVER_LOG_FILE,
+    SERVER_LOG_FILE,
     TRANSCRIPTION_FILE, RESPONSE_FILE, COMMAND_FILE,
     CMD_LISTEN, CMD_SPEAK, CMD_IDLE, CMD_UI_READY, CMD_UI_CLOSED,
     SPEECH_TIMEOUT, ENV_TTS_VOICE
 )
 
+# Import state manager
+from speech_mcp.state_manager import StateManager
+
 # Import shared audio processor and speech recognition
 from speech_mcp.audio_processor import AudioProcessor
-from speech_mcp.speech_recognition import initialize_speech_recognition as init_speech_recognition
-from speech_mcp.speech_recognition import transcribe_audio as transcribe_audio_file
+from speech_mcp.speech_recognition import (
+    initialize_speech_recognition as init_speech_recognition,
+    transcribe_audio as transcribe_audio_file,
+    start_streaming_transcription,
+    add_streaming_audio_chunk,
+    stop_streaming_transcription,
+    get_current_streaming_transcription,
+    is_streaming_active
+)
 
 mcp = FastMCP("speech")
 
@@ -123,28 +133,13 @@ kokoro_init_thread = threading.Thread(target=async_kokoro_init)
 kokoro_init_thread.daemon = True
 kokoro_init_thread.start()
 
-# Load speech state from file or use default
-def load_speech_state():
-    try:
-        if os.path.exists(STATE_FILE):
-            logger.debug(f"Loading speech state from {STATE_FILE}")
-            with open(STATE_FILE, 'r') as f:
-                state = json.load(f)
-                logger.debug(f"Speech state loaded: {state}")
-                return state
-        else:
-            logger.debug(f"State file {STATE_FILE} not found, using default state")
-            return DEFAULT_SPEECH_STATE.copy()
-    except Exception as e:
-        logger.error(f"Error loading speech state: {e}")
-        return DEFAULT_SPEECH_STATE.copy()
+# State management has been moved to StateManager class
 
-# Save speech state to file
+# Save speech state using StateManager
 def save_speech_state(state, create_response_file=False):
     try:
-        logger.debug(f"Saving speech state to {STATE_FILE}")
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f)
+        # Update state in StateManager
+        state_manager.update_state(state, persist=True)
         
         # Only create response file if specifically requested
         if create_response_file:
@@ -172,8 +167,9 @@ def save_speech_state(state, create_response_file=False):
         logger.error(f"Error saving speech state: {e}")
         pass
 
-# Initialize speech state
-speech_state = load_speech_state()
+# Initialize state manager
+state_manager = StateManager.get_instance()
+speech_state = state_manager.get_state()  # Get a copy of the current state
 
 def initialize_speech_recognition():
     """Initialize speech recognition"""
@@ -332,6 +328,74 @@ def record_audio():
     except Exception as e:
         raise Exception(f"Error recording audio: {str(e)}")
 
+def record_audio_streaming():
+    """Record audio using streaming transcription and return the transcription"""
+    try:
+        # Create AudioProcessor instance
+        audio_processor = AudioProcessor()
+        
+        # Initialize speech recognition
+        if not initialize_speech_recognition():
+            raise Exception("Failed to initialize speech recognition")
+        
+        # Set up result storage and synchronization
+        transcription_result = {"text": "", "metadata": {}}
+        transcription_ready = threading.Event()
+        
+        # Define callbacks for streaming transcription
+        def on_partial_transcription(text):
+            # Log partial transcription
+            logger.debug(f"Partial transcription: {text}")
+            # Update state with partial transcription
+            speech_state["last_transcript"] = text
+            save_speech_state(speech_state, False)
+        
+        def on_final_transcription(text, metadata):
+            # Log final transcription
+            logger.info(f"Final transcription: {text}")
+            # Store result and signal completion
+            transcription_result["text"] = text
+            transcription_result["metadata"] = metadata
+            transcription_ready.set()
+        
+        # Start streaming transcription
+        if not start_streaming_transcription(
+            language="en",
+            on_partial_transcription=on_partial_transcription,
+            on_final_transcription=on_final_transcription
+        ):
+            raise Exception("Failed to start streaming transcription")
+        
+        # Start audio recording in streaming mode
+        if not audio_processor.start_listening(
+            streaming_mode=True,
+            on_audio_chunk=add_streaming_audio_chunk
+        ):
+            stop_streaming_transcription()
+            raise Exception("Failed to start audio recording")
+        
+        # Wait for transcription to complete (with timeout)
+        max_wait_time = 600  # 10 minutes maximum
+        if not transcription_ready.wait(max_wait_time):
+            logger.warning("Transcription timeout reached")
+        
+        # Stop audio recording
+        audio_processor.stop_listening()
+        
+        # If streaming is still active, stop it
+        if is_streaming_active():
+            text, metadata = stop_streaming_transcription()
+            if not transcription_result["text"]:
+                transcription_result["text"] = text
+                transcription_result["metadata"] = metadata
+        
+        # Return the transcription
+        return transcription_result["text"]
+        
+    except Exception as e:
+        logger.error(f"Error in streaming audio recording: {str(e)}")
+        raise Exception(f"Error recording audio: {str(e)}")
+
 def transcribe_audio(audio_file_path):
     """Transcribe audio file using the speech recognition module"""
     try:
@@ -479,11 +543,8 @@ def listen_for_speech() -> str:
     save_speech_state(speech_state, False)
     
     try:
-        # Record audio
-        audio_file_path = record_audio()
-        
-        # Transcribe audio
-        transcription = transcribe_audio(audio_file_path)
+        # Use streaming transcription
+        transcription = record_audio_streaming()
         
         # Update state
         speech_state["listening"] = False
@@ -541,19 +602,57 @@ class VoiceInstance:
     """Manages a single Kokoro TTS voice instance"""
     def __init__(self, voice_id: str):
         from speech_mcp.tts_adapters import KokoroTTS
-        self.engine = KokoroTTS(voice=voice_id, lang_code="en", speed=1.0)
+        self.engine = None
+        self.fallback_engine = None
         self.voice_id = voice_id
         
-        # Verify initialization
-        if not self.engine.is_initialized or not self.engine.kokoro_available:
-            raise Exception(f"Failed to initialize Kokoro TTS for voice {voice_id}")
+        logger.info(f"Initializing VoiceInstance for voice: {voice_id}")
         
-        # Get available voices and organize them by category
-        available_voices = self.engine.get_available_voices()
+        # Try to initialize Kokoro
+        try:
+            logger.info("Attempting to initialize Kokoro TTS...")
+            self.engine = KokoroTTS(voice=voice_id, lang_code="a", speed=1.0)
+            logger.info(f"Kokoro TTS initialized: is_initialized={self.engine.is_initialized}, kokoro_available={self.engine.kokoro_available}")
+            if self.engine.is_initialized and self.engine.kokoro_available:
+                logger.info("Kokoro TTS initialization successful")
+                return  # Successfully initialized
+            else:
+                logger.warning("Kokoro TTS initialization incomplete")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Kokoro TTS for voice {voice_id}: {str(e)}")
+            self.engine = None
+            
+        # Try fallback if Kokoro failed
+        try:
+            logger.info("Attempting to initialize fallback TTS...")
+            from speech_mcp.tts_adapters import Pyttsx3TTS
+            self.fallback_engine = Pyttsx3TTS(lang_code="en", speed=1.0)
+            logger.info(f"Fallback TTS initialized: is_initialized={self.fallback_engine.is_initialized}")
+            if self.fallback_engine.is_initialized:
+                logger.info("Fallback TTS initialization successful")
+                return  # Successfully initialized fallback
+            else:
+                logger.warning("Fallback TTS initialization incomplete")
+        except Exception as e:
+            logger.warning(f"Failed to initialize fallback TTS: {str(e)}")
+            self.fallback_engine = None
         
-        # Verify voice is available
-        if voice_id not in available_voices:
-            # Create a formatted list of voices by category
+        # If both Kokoro and fallback failed, raise exception
+        if self.engine is None and self.fallback_engine is None:
+            logger.error("Both Kokoro and fallback TTS initialization failed")
+            raise Exception(f"Failed to initialize any TTS engine for voice {voice_id}")
+        
+        # If initialization succeeded but voice isn't available, show available voices
+        available_voices = []
+        if self.engine and self.engine.kokoro_available:
+            available_voices = self.engine.get_available_voices()
+            logger.info(f"Got {len(available_voices)} available voices from Kokoro")
+        elif self.fallback_engine:
+            available_voices = self.fallback_engine.get_available_voices()
+            logger.info(f"Got {len(available_voices)} available voices from fallback")
+            
+        if available_voices and voice_id not in available_voices:
+            logger.warning(f"Requested voice {voice_id} not found in available voices")
             voice_categories = {
                 "American Female": [v for v in available_voices if v.startswith("af_")],
                 "American Male": [v for v in available_voices if v.startswith("am_")],
@@ -579,32 +678,71 @@ class VoiceInstance:
         
     def generate_audio(self, text: str, output_path: str) -> bool:
         """Generate audio for the given text"""
-        result = self.engine.save_to_file(text, output_path)
-        if not result:
-            # Create the same formatted error message as in __init__
+        logger.info(f"Generating audio for text: '{text[:50]}...' with voice {self.voice_id}")
+        
+        # Try Kokoro first
+        if self.engine and self.engine.kokoro_available:
+            try:
+                logger.info("Attempting to generate audio with Kokoro TTS...")
+                result = self.engine.save_to_file(text, output_path)
+                if result:
+                    logger.info("Successfully generated audio with Kokoro TTS")
+                    return True
+                else:
+                    logger.warning("Kokoro TTS save_to_file returned False")
+            except Exception as e:
+                logger.warning(f"Kokoro TTS failed to generate audio: {str(e)}")
+        else:
+            logger.info("Kokoro TTS not available for audio generation")
+        
+        # Try fallback if available
+        if self.fallback_engine:
+            try:
+                logger.info("Attempting to generate audio with fallback TTS...")
+                result = self.fallback_engine.save_to_file(text, output_path)
+                if result:
+                    logger.info("Successfully generated audio with fallback TTS")
+                    return True
+                else:
+                    logger.warning("Fallback TTS save_to_file returned False")
+            except Exception as e:
+                logger.warning(f"Fallback TTS failed to generate audio: {str(e)}")
+        else:
+            logger.info("Fallback TTS not available for audio generation")
+        
+        # If both failed, raise exception with available voices info
+        logger.error("Both Kokoro and fallback TTS failed to generate audio")
+        
+        # Get available voices from whichever engine is working
+        available_voices = []
+        if self.engine and self.engine.kokoro_available:
             available_voices = self.engine.get_available_voices()
-            voice_categories = {
-                "American Female": [v for v in available_voices if v.startswith("af_")],
-                "American Male": [v for v in available_voices if v.startswith("am_")],
-                "British Female": [v for v in available_voices if v.startswith("bf_")],
-                "British Male": [v for v in available_voices if v.startswith("bm_")],
-                "Other English": [v for v in available_voices if v.startswith(("ef_", "em_"))],
-                "French": [v for v in available_voices if v.startswith("ff_")],
-                "Hindi": [v for v in available_voices if v.startswith(("hf_", "hm_"))],
-                "Italian": [v for v in available_voices if v.startswith(("if_", "im_"))],
-                "Japanese": [v for v in available_voices if v.startswith(("jf_", "jm_"))],
-                "Portuguese": [v for v in available_voices if v.startswith(("pf_", "pm_"))],
-                "Chinese": [v for v in available_voices if v.startswith(("zf_", "zm_"))]
-            }
-            
-            error_msg = [f"Failed to generate audio with voice '{self.voice_id}'. Available voices:"]
-            for category, voices in voice_categories.items():
-                if voices:
-                    error_msg.append(f"\n{category}:")
-                    error_msg.append("  " + ", ".join(sorted(voices)))
-            
-            raise Exception("\n".join(error_msg))
-        return True
+            logger.info(f"Got {len(available_voices)} available voices from Kokoro")
+        elif self.fallback_engine:
+            available_voices = self.fallback_engine.get_available_voices()
+            logger.info(f"Got {len(available_voices)} available voices from fallback")
+        
+        voice_categories = {
+            "American Female": [v for v in available_voices if v.startswith("af_")],
+            "American Male": [v for v in available_voices if v.startswith("am_")],
+            "British Female": [v for v in available_voices if v.startswith("bf_")],
+            "British Male": [v for v in available_voices if v.startswith("bm_")],
+            "Other English": [v for v in available_voices if v.startswith(("ef_", "em_"))],
+            "French": [v for v in available_voices if v.startswith("ff_")],
+            "Hindi": [v for v in available_voices if v.startswith(("hf_", "hm_"))],
+            "Italian": [v for v in available_voices if v.startswith(("if_", "im_"))],
+            "Japanese": [v for v in available_voices if v.startswith(("jf_", "jm_"))],
+            "Portuguese": [v for v in available_voices if v.startswith(("pf_", "pm_"))],
+            "Chinese": [v for v in available_voices if v.startswith(("zf_", "zm_"))]
+        }
+        
+        error_msg = [f"Failed to generate audio with voice '{self.voice_id}'. Available voices:"]
+        for category, voices in voice_categories.items():
+            if voices:
+                error_msg.append(f"\n{category}:")
+                error_msg.append("  " + ", ".join(sorted(voices)))
+        
+        raise Exception("\n".join(error_msg))
 
 class VoiceManager:
     """Manages multiple voice instances"""
@@ -748,9 +886,16 @@ def start_conversation() -> str:
     """
     global speech_state
     
-    # Force reset the speech state to avoid any stuck states
-    speech_state = DEFAULT_SPEECH_STATE.copy()
-    save_speech_state(speech_state, False)
+    # Force reset the state
+    state_manager.update_state({
+        "listening": False,
+        "speaking": False,
+        "last_transcript": "",
+        "last_response": "",
+        "ui_active": False,
+        "ui_process_id": None,
+        "error": None
+    })
     
     # Initialize speech recognition if not already done
     if not initialize_speech_recognition():

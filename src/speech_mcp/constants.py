@@ -12,7 +12,6 @@ from pathlib import Path
 
 # File paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.path.join(BASE_DIR, "speech_state.json")
 TRANSCRIPTION_FILE = os.path.join(BASE_DIR, "transcription.txt")
 RESPONSE_FILE = os.path.join(BASE_DIR, "response.txt")
 COMMAND_FILE = os.path.join(BASE_DIR, "ui_command.txt")
@@ -33,15 +32,7 @@ AUDIO_DIR = os.path.join(BASE_DIR, "resources", "audio")
 START_LISTENING_SOUND = os.path.join(AUDIO_DIR, "start_listening.wav")
 STOP_LISTENING_SOUND = os.path.join(AUDIO_DIR, "stop_listening.wav")
 
-# Default speech state
-DEFAULT_SPEECH_STATE = {
-    "listening": False,
-    "speaking": False,
-    "last_transcript": "",
-    "last_response": "",
-    "ui_active": False,
-    "ui_process_id": None
-}
+# Default speech state has been moved to state_manager.py
 
 # Configuration paths
 CONFIG_DIR = os.path.join(str(Path.home()), '.config', 'speech-mcp')
@@ -77,7 +68,15 @@ CMD_UI_READY = "UI_READY"
 CMD_UI_CLOSED = "UI_CLOSED"
 
 # Speech recognition parameters
-SILENCE_THRESHOLD = 0.008  # Reduced threshold to be more sensitive to quiet speech
-MAX_SILENCE_DURATION = 2.0  # 2 seconds of silence to stop recording
+SILENCE_THRESHOLD = 0.02  # Threshold for detecting silence (higher = less sensitive)
+MAX_SILENCE_DURATION = 3.0  # 3 seconds of silence to stop recording
 SILENCE_CHECK_INTERVAL = 0.1  # Check every 100ms
 SPEECH_TIMEOUT = 600  # 10 minutes timeout for speech recognition
+
+# Streaming transcription parameters
+STREAMING_END_SILENCE_DURATION = 4.0  # 4 seconds without new words to end streaming
+STREAMING_INITIAL_WAIT = 10.0  # 10 seconds initial wait before first silence check
+STREAMING_PROCESSING_INTERVAL = 0.1   # Process streaming audio every 100ms
+STREAMING_BUFFER_SIZE = 10  # Number of chunks to buffer before processing (about 0.5 seconds)
+STREAMING_MAX_BUFFER_SIZE = 100  # Maximum buffer size to prevent memory issues
+STREAMING_MIN_WORDS = 2  # Minimum number of words before considering end of speech

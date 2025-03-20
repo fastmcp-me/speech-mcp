@@ -3,7 +3,7 @@ Speech recognition module for speech-mcp.
 
 This module provides centralized speech recognition functionality including:
 - Model loading and initialization
-- Audio transcription
+- Audio transcription (file-based and streaming)
 - Fallback mechanisms
 - Consistent error handling
 
@@ -11,10 +11,13 @@ It consolidates speech recognition code that was previously duplicated
 across server.py and speech_ui.py.
 """
 
+# Import the streaming transcriber
+from speech_mcp.streaming_transcriber import StreamingTranscriber
+
 import os
 import time
 from datetime import timedelta, datetime
-from typing import Optional, Tuple, Dict, Any, List, Union
+from typing import Optional, Tuple, Dict, Any, List, Union, Callable
 
 # Import the centralized logger
 from speech_mcp.utils.logger import get_logger
@@ -46,6 +49,9 @@ class SpeechRecognizer:
         self.device = device
         self.compute_type = compute_type
         self.is_initialized = False
+        
+        # Add streaming transcriber
+        self.streaming_transcriber = None
         
         # Initialize the speech recognition models in the background
         self._initialize_speech_recognition()
@@ -415,6 +421,99 @@ class SpeechRecognizer:
                 "words": []
             } for segment in segments]
     
+    def start_streaming_transcription(self, 
+                                    language: str = "en",
+                                    on_partial_transcription: Optional[Callable[[str], None]] = None,
+                                    on_final_transcription: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> bool:
+        """
+        Start streaming transcription using the configured model.
+        
+        Args:
+            language: Language code for transcription (default: "en")
+            on_partial_transcription: Callback for partial transcription updates
+            on_final_transcription: Callback for final transcription with metadata
+            
+        Returns:
+            bool: True if streaming started successfully, False otherwise
+        """
+        # Ensure speech recognition is initialized
+        if not self.is_initialized and not self._initialize_speech_recognition():
+            logger.error("Failed to initialize speech recognition for streaming")
+            return False
+            
+        try:
+            # Create streaming transcriber if needed
+            if self.streaming_transcriber is None:
+                self.streaming_transcriber = StreamingTranscriber(
+                    model_name=self.model_name,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    language=language,
+                    on_partial_transcription=on_partial_transcription,
+                    on_final_transcription=on_final_transcription
+                )
+            
+            # Start streaming
+            success = self.streaming_transcriber.start_streaming()
+            if success:
+                logger.info("Streaming transcription started successfully")
+            else:
+                logger.error("Failed to start streaming transcription")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error starting streaming transcription: {e}")
+            return False
+    
+    def add_streaming_audio_chunk(self, audio_chunk: bytes) -> None:
+        """
+        Add an audio chunk to the streaming transcription.
+        
+        Args:
+            audio_chunk: Raw audio data to process
+        """
+        if self.streaming_transcriber is not None and self.streaming_transcriber.is_active():
+            self.streaming_transcriber.add_audio_chunk(audio_chunk)
+    
+    def stop_streaming_transcription(self) -> Tuple[str, Dict[str, Any]]:
+        """
+        Stop streaming transcription and get final results.
+        
+        Returns:
+            Tuple containing:
+                - The final transcription text
+                - A dictionary with metadata about the transcription
+        """
+        if self.streaming_transcriber is not None:
+            try:
+                return self.streaming_transcriber.stop_streaming()
+            except Exception as e:
+                logger.error(f"Error stopping streaming transcription: {e}")
+        
+        return "", {"error": "No active streaming transcription", "engine": "none"}
+    
+    def get_current_streaming_transcription(self) -> str:
+        """
+        Get the current partial transcription.
+        
+        Returns:
+            str: The current partial transcription text
+        """
+        if self.streaming_transcriber is not None:
+            return self.streaming_transcriber.get_current_transcription()
+        return ""
+    
+    def is_streaming_active(self) -> bool:
+        """
+        Check if streaming transcription is active.
+        
+        Returns:
+            bool: True if streaming is active, False otherwise
+        """
+        return (self.streaming_transcriber is not None and 
+                self.streaming_transcriber.is_active())
+    
     def get_available_models(self) -> List[Dict[str, Any]]:
         """
         Get a list of available speech recognition models.
@@ -574,3 +673,63 @@ def get_current_model() -> Dict[str, Any]:
         Dictionary containing information about the current model
     """
     return default_recognizer.get_current_model()
+
+def start_streaming_transcription(
+    language: str = "en",
+    on_partial_transcription: Optional[Callable[[str], None]] = None,
+    on_final_transcription: Optional[Callable[[str, Dict[str, Any]], None]] = None
+) -> bool:
+    """
+    Start streaming transcription using the default speech recognizer.
+    
+    Args:
+        language: Language code for transcription (default: "en")
+        on_partial_transcription: Callback for partial transcription updates
+        on_final_transcription: Callback for final transcription with metadata
+        
+    Returns:
+        bool: True if streaming started successfully, False otherwise
+    """
+    return default_recognizer.start_streaming_transcription(
+        language=language,
+        on_partial_transcription=on_partial_transcription,
+        on_final_transcription=on_final_transcription
+    )
+
+def add_streaming_audio_chunk(audio_chunk: bytes) -> None:
+    """
+    Add an audio chunk to the streaming transcription.
+    
+    Args:
+        audio_chunk: Raw audio data to process
+    """
+    default_recognizer.add_streaming_audio_chunk(audio_chunk)
+
+def stop_streaming_transcription() -> Tuple[str, Dict[str, Any]]:
+    """
+    Stop streaming transcription and get final results.
+    
+    Returns:
+        Tuple containing:
+            - The final transcription text
+            - A dictionary with metadata about the transcription
+    """
+    return default_recognizer.stop_streaming_transcription()
+
+def get_current_streaming_transcription() -> str:
+    """
+    Get the current partial transcription.
+    
+    Returns:
+        str: The current partial transcription text
+    """
+    return default_recognizer.get_current_streaming_transcription()
+
+def is_streaming_active() -> bool:
+    """
+    Check if streaming transcription is active.
+    
+    Returns:
+        bool: True if streaming is active, False otherwise
+    """
+    return default_recognizer.is_streaming_active()
